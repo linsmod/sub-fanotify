@@ -1,0 +1,10 @@
+# 编译产物
+/sfa-server
+/sfa_client
+*.o
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
