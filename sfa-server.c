@@ -96,7 +96,12 @@ static int resolve_dfid_event(int mount_fd,
     return 0;
 }
 
-/* 从事件元数据中提取指定类型的 fid 信息记录；type 传 0 表示任意 fid 记录 */
+/* 从事件元数据中提取指定类型的 fid 信息记录。type 必须显式给出：
+ * 曾经支持 type=0「任意 fid 记录、返回第一条」的宽松匹配，正确性隐式
+ * 依赖「DFID_NAME 排在 FID 之前」的内核记录顺序 —— 顺序一旦翻转，
+ * is_dirent 的猜测就会错，每条 DELETE 的路径都会带上 " (deleted)" 后缀，
+ * 不报错不崩溃，只是内容错（issue #5 的实测与判别方法见
+ * issues/closed/dfid-record-order-unknown.md）。按类型选取后与位置无关。 */
 static struct fanotify_event_info_fid *
 find_fid_info(struct fanotify_event_metadata *meta, int type)
 {
@@ -107,14 +112,8 @@ find_fid_info(struct fanotify_event_metadata *meta, int type)
         struct fanotify_event_info_header *h =
             (struct fanotify_event_info_header *)p;
         if (h->len < sizeof(*h)) break;
-        if (type == 0) {
-            if (h->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME ||
-                h->info_type == FAN_EVENT_INFO_TYPE_DFID ||
-                h->info_type == FAN_EVENT_INFO_TYPE_FID)
-                return (struct fanotify_event_info_fid *)p;
-        } else if ((int)h->info_type == type) {
+        if ((int)h->info_type == type)
             return (struct fanotify_event_info_fid *)p;
-        }
         p += h->len;
     }
     return NULL;
@@ -592,11 +591,16 @@ int main(int argc, char **argv)
                             loss_noinfo(&loss);
                         }
                     } else {
-                        struct fanotify_event_info_fid *fid = find_fid_info(meta, 0);
-                        /* 只有 DFID_NAME 记录是「父目录句柄 + 名字」，
-                         * FID/DFID 记录的句柄就是对象本身，不能按事件类型猜。 */
-                        int is_dirent = fid &&
-                            fid->hdr.info_type == FAN_EVENT_INFO_TYPE_DFID_NAME;
+                        /* 按类型显式取，优先 DFID_NAME（父目录句柄 + 名字，
+                         * 路径可拼到文件级）；没有它再退到 DFID / FID
+                         * （对象自身句柄，此时不能按事件类型猜语义）。 */
+                        struct fanotify_event_info_fid *fid =
+                            find_fid_info(meta, FAN_EVENT_INFO_TYPE_DFID_NAME);
+                        int is_dirent = fid != NULL;
+                        if (!fid)
+                            fid = find_fid_info(meta, FAN_EVENT_INFO_TYPE_DFID);
+                        if (!fid)
+                            fid = find_fid_info(meta, FAN_EVENT_INFO_TYPE_FID);
 
                         if (fid && mask) {
                             struct sfa_event ev = {
