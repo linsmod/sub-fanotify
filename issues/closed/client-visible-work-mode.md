@@ -1,12 +1,12 @@
 ---
 id: 9
-status: accepted
+status: closed
 type: feature
 priority: P2
 created: 2026-10-06
-closed:
-commit:
-verdict:
+closed: 2026-10-06
+commit: 20eafeb
+verdict: 复用 sfa_welcome.reserved（改名 flags）携带 SFA_WF_*，sizeof 与版本号不变；客户端实测可见 FILESYSTEM|RENAME_PAIR|ONDIR|PATH_LOOKUP，六项验收全过
 ---
 
 # 客户端看不到服务端的工作模式：连接后不知道监控范围有多大
