@@ -27,9 +27,9 @@ MNT=$TMP/mnt
 SOCK=$TMP/sfa.sock
 mkdir -p "$MNT"
 
-# 内嵌 demo 只用 libsfa-server.a + 头文件（不经 CLI、不链接 sfa-server.c）
-cc -O2 -Wall -Wextra -I. -o "$TMP/demo" scripts/embed_server_demo.c libsfa-server.a || {
-    echo "FAIL: 无法链接 libsfa-server.a（内嵌调用方有自己的 main）"; exit 1; }
+# 内嵌 demo 只用 libsfa.a + 头文件（不经 CLI、不链接 sfa-server.c）
+cc -O2 -Wall -Wextra -I. -o "$TMP/demo" scripts/embed_server_demo.c libsfa.a || {
+    echo "FAIL: 无法链接 libsfa.a（内嵌调用方有自己的 main）"; exit 1; }
 
 "$TMP/demo" "$MNT" "$SOCK" >"$TMP/demo.out" 2>"$TMP/demo.err" & D=$!
 PIDS="$PIDS $D"

@@ -21,41 +21,34 @@ sfa-server: sfa-server.c sfa_server.c sfa_probe.c sfa.h sfa_probe.h sfa_server.h
 sfa_client: sfa_client.c libsfa.c sfa.h
 	$(CC) $(CFLAGS) -o $@ sfa_client.c libsfa.c $(LDFLAGS)
 
-# 客户端 SDK 静态库：只依赖 libc，不需要任何特权
-libsfa.a: libsfa.c sfa.h
-	$(CC) $(CFLAGS) -c libsfa.c -o libsfa.o
-	ar rcs $@ libsfa.o
-	@rm -f libsfa.o
-
-# 服务端库：把 watcher 嵌进调用方进程（issue #10）。含 fanotify，需要 CAP_SYS_ADMIN。
-# 注意 sfa-server.c（有 main）**不能**进这个归档：静态库按符号拉取目标文件，
-# 调用方引用 sfa_srv_open 时会连带把 main 拉进来，与调用方自己的 main 冲突。
-libsfa-server.a: sfa_server.c sfa_probe.c sfa_server.h sfa_probe.h sfa.h
-	$(CC) $(CFLAGS) -c sfa_server.c -o sfa_server.o
+# 单一归档：客户端 SDK + 服务端库（sfa_srv_*）+ 能力探测。
+#
+# 为什么一个库就够：静态归档是**按符号拉取目标文件**的 —— 只调 sfa_connect 的
+# 消费方，链接器不会把 sfa_server.o / sfa_probe.o 拉进它的二进制，所以
+# 「客户端库保持不需要特权」这件事由链接器保证，不必靠拆归档。
+# （代价只在共享库形态下出现：.so 会把所有目标文件链进去，那时才需要拆库或用
+#   符号可见性控制；本项目发的是 .a。）
+libsfa.a: libsfa.c sfa_server.c sfa_probe.c sfa.h sfa_server.h sfa_probe.h
+	$(CC) $(CFLAGS) -c libsfa.c     -o libsfa.o
 	$(CC) $(CFLAGS) -c sfa_probe.c  -o sfa_probe.o
-	ar rcs $@ sfa_server.o sfa_probe.o
-	@rm -f sfa_server.o sfa_probe.o
-
-# 一个库搞定客户端 + 服务端的入口（客户要求，见 issue #10）
-libsfa-all.a: libsfa.c sfa_server.c sfa_probe.c sfa.h sfa_server.h sfa_probe.h
-	$(CC) $(CFLAGS) -c libsfa.c     -o libsfa-all-libsfa.o
-	$(CC) $(CFLAGS) -c sfa_server.c -o libsfa-all-server.o
-	$(CC) $(CFLAGS) -c sfa_probe.c  -o libsfa-all-probe.o
-	ar rcs $@ libsfa-all-libsfa.o libsfa-all-server.o libsfa-all-probe.o
-	@rm -f libsfa-all-libsfa.o libsfa-all-server.o libsfa-all-probe.o
+	$(CC) $(CFLAGS) -c sfa_server.c -o sfa_server.o
+	ar rcs $@ libsfa.o sfa_probe.o sfa_server.o
+	@rm -f libsfa.o sfa_probe.o sfa_server.o
+# 注意 sfa-server.c（含 main）**不能**进归档：调用方一旦引用 sfa_srv_open，
+# 同一个目标文件里的 main 会被一并拉进来，与调用方自己的 main 冲突。
 
 clean:
-	rm -f sfa-server sfa_client libsfa.a libsfa-server.a libsfa-all.a *.o
+	rm -f sfa-server sfa_client libsfa.a *.o
 
-# 安装：头文件（sfa.h 契约 / sfa_probe.h / sfa_server.h）+ 三个库 + 可执行文件。
+# 安装：头文件（sfa.h 契约 / sfa_probe.h / sfa_server.h）+ 库 + 可执行文件。
 # install-bin 只装可执行文件（只要部署物、不做开发的场景）。
-install: all libsfa.a libsfa-server.a libsfa-all.a
+install: all libsfa.a
 	@mkdir -p "$(DESTDIR)$(INCLUDEDIR)" "$(DESTDIR)$(LIBDIR)" "$(DESTDIR)$(BINDIR)"
 	install -m 0644 sfa.h sfa_probe.h sfa_server.h "$(DESTDIR)$(INCLUDEDIR)/"
-	install -m 0644 libsfa.a libsfa-server.a libsfa-all.a "$(DESTDIR)$(LIBDIR)/"
+	install -m 0644 libsfa.a "$(DESTDIR)$(LIBDIR)/"
 	install -m 0755 sfa-server sfa_client "$(DESTDIR)$(BINDIR)/"
 	@echo "installed: $(DESTDIR)$(INCLUDEDIR)/{sfa.h,sfa_probe.h,sfa_server.h}"
-	@echo "installed: $(DESTDIR)$(LIBDIR)/{libsfa.a,libsfa-server.a,libsfa-all.a}"
+	@echo "installed: $(DESTDIR)$(LIBDIR)/libsfa.a"
 	@echo "installed: $(DESTDIR)$(BINDIR)/{sfa-server,sfa_client}"
 
 install-bin: all
@@ -66,8 +59,7 @@ install-bin: all
 uninstall:
 	rm -f "$(DESTDIR)$(INCLUDEDIR)/sfa.h" "$(DESTDIR)$(INCLUDEDIR)/sfa_probe.h" \
 	      "$(DESTDIR)$(INCLUDEDIR)/sfa_server.h"
-	rm -f "$(DESTDIR)$(LIBDIR)/libsfa.a" "$(DESTDIR)$(LIBDIR)/libsfa-server.a" \
-	      "$(DESTDIR)$(LIBDIR)/libsfa-all.a"
+	rm -f "$(DESTDIR)$(LIBDIR)/libsfa.a"
 	rm -f "$(DESTDIR)$(BINDIR)/sfa-server" "$(DESTDIR)$(BINDIR)/sfa_client"
 	@echo "uninstalled from $(DESTDIR)$(PREFIX)"
 
@@ -140,7 +132,7 @@ BINPKG    := $(DISTDIR)/$(BINNAME).tar.gz
 
 # 固定 owner 与 mtime（取 commit 的提交时间），源码包同一 commit 重复打包得到
 # 同样的字节。需要 GNU tar >= 1.28（--sort）。
-dist: all libsfa.a libsfa-server.a libsfa-all.a
+dist: all libsfa.a
 	@$(GIT) rev-parse --git-dir >/dev/null 2>&1 || \
 	    { echo "make dist 需要在 sfa 这个 git 仓库内运行"; exit 1; }
 	@rm -rf "$(STAGE)" "$(BINSTAGE)"
@@ -156,7 +148,7 @@ dist: all libsfa.a libsfa-server.a libsfa-all.a
 	@mkdir -p "$(BINSTAGE)/$(BINNAME)/include" "$(BINSTAGE)/$(BINNAME)/lib" \
 	          "$(BINSTAGE)/$(BINNAME)/bin"
 	@cp sfa.h sfa_probe.h sfa_server.h "$(BINSTAGE)/$(BINNAME)/include/"
-	@cp libsfa.a libsfa-server.a libsfa-all.a "$(BINSTAGE)/$(BINNAME)/lib/"
+	@cp libsfa.a "$(BINSTAGE)/$(BINNAME)/lib/"
 	@cp sfa-server sfa_client "$(BINSTAGE)/$(BINNAME)/bin/"
 	@printf '%s\n' '$(VERSION)' > "$(BINSTAGE)/$(BINNAME)/VERSION"
 	@tar --sort=name --owner=0 --group=0 --numeric-owner \

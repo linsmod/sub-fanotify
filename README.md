@@ -175,8 +175,11 @@ self-pipe that wakes `poll`), so it can be called from a signal handler or from
 another thread. To drive it from your own event loop, poll `sfa_srv_fd()` and
 then call `sfa_srv_poll(srv, 0)`. Several instances can coexist in one process.
 
-Link against `libsfa-server.a`, or `libsfa-all.a` if you want the client SDK in
-the same archive. `libsfa.a` deliberately stays client-only.
+Everything lives in the one archive: link `libsfa.a`. Static archives are pulled
+in per object file, so a client that only calls `sfa_connect` does **not** drag
+the server objects (or their fanotify dependency) into its binary — the linker
+decides that, not the packaging. (Under a shared library this would stop being
+true, which is when splitting or symbol visibility would start to matter.)
 
 **Two constraints to weigh before choosing this shape:**
 

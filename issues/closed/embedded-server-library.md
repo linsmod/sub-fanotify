@@ -149,3 +149,21 @@ int  sfa_srv_selftest(void);                     /* 纯逻辑自检，供内嵌�
 
 > 两个缺陷都是「README 承诺了、实现没做到」，与 #3/#8 同类；记在这里是因为它们
 > 是本 issue 实测过程中暴露的，而不是新开一篇 —— 修复范围与手段都落在 scripts/ 与 Makefile 内。
+
+## 后续修正（2026-10-06）：归档划分回退为单一库
+
+本篇实现的三个归档（`libsfa.a` 客户端 / `libsfa-server.a` 服务端 / `libsfa-all.a`
+合并）经复核后**回退为单一 `libsfa.a`**（成员 `libsfa.o` + `sfa_probe.o` + `sfa_server.o`）。
+
+REASON：静态归档按符号拉取目标文件 —— 只调 `sfa_connect` 的消费方，链接器不会把
+server / probe 成员拉进它的二进制。实测：一个只调用客户端 API 的程序链接单库后，
+`nm -u` 里没有任何 `fanotify` / `sfa_srv_*` / `open_by_handle_at` 符号。
+也就是说「客户端不需要特权依赖」这件事本来就由链接器保证，拆库换不到它，
+反而多出「该链 `-lsfa` 还是 `-lsfa-server`」的选择与三份归档的维护面。
+（**共享库形态下结论相反**：`.so` 会链入全部目标文件，那时拆库或符号可见性控制
+才真正起作用；本项目发的是 `.a`，所以按当前形态简化。这条写在这里，免得将来
+要出 `.so` 时又把结论照搬。）
+
+验收 5 相应改为：单一 `libsfa.a` 不含 `main`（实测 0 个），且只订阅的消费方链接后
+不含 fanotify / `sfa_srv_*` 符号（实测无）。其余七条不变，e2e 全过（内嵌 e2e 改为
+链接 `libsfa.a`）。`make install` / `make dist` 同步为单一库形态，已实测。
