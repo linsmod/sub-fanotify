@@ -1,12 +1,12 @@
 ---
 id: 10
-status: accepted
+status: closed
 type: feature
 priority: P1
 created: 2026-10-06
-closed:
-commit:
-verdict:
+closed: 2026-10-06
+commit: 3f34600
+verdict: server 逻辑库化为 sfa_srv_*（opaque 实例、自管道 stop、错误返回、日志回调），CLI 变薄包装；三个归档 libsfa/-server/-all，八项验收全过（含内嵌 e2e 与双实例隔离）
 ---
 
 # 客户要求「库文件包含 server 能力」：server 逻辑全在 `main()` 里，外部无法复用
@@ -116,3 +116,36 @@ int  sfa_srv_selftest(void);                     /* 纯逻辑自检，供内嵌�
 7. 新增 e2e：一个内嵌 server 的小程序（用库 API 起服务、信号停）与 `sfa_client`
    互操作，能收到事件并优雅退出；
 8. README 增加「Embedding the server」小节，含权限边界与崩溃域两条约束。
+
+## 修复与实测（2026-10-06）
+
+已实现并验证，环境 WSL2 `6.18.40.1-microsoft-standard-WSL2`（root）。
+
+| 验收标准 | 实现 / 实测 | |
+|---|---|---|
+| 1. `sfa_server.h`/`.c` 落地 API；实例内无跨实例共享状态 | `g_stop`/`g_prefix`/客户端表全部收进 `struct sfa_srv`；`scripts/test_embedded.sh` 实测同进程双实例各自起服务、各自收到自己的事件（实例 1 另见同文件系统上 `mnt2` 的路径属 FILESYSTEM 模式的预期行为，非隔离缺陷） | 通过 |
+| 2. `stop()` 在信号处理器里调用可让 `run()` 返回 | 自管道唤醒（`write` 是 async-signal-safe）；demo 在 SIGTERM 处理器里 `sfa_srv_stop()`，实测退出码 0 | 通过 |
+| 3. `sfa_srv_fd()` + `sfa_srv_poll()` 可驱动投递 | 双实例用例正是用 `sfa_srv_poll(s, 200/0)` 自己驱动的，客户端收到事件 | 通过 |
+| 4. CLI 行为不变，现有 e2e 全过 | 输出/退出码保持；四条 e2e 全过（见下） | 通过 |
+| 5. 三个归档产出；`libsfa.a` 不含 main / fanotify 符号 | `nm` 确认：`libsfa.a` 无 `main`、无 fanotify 未定义符号；`libsfa-server.a` 无 `main`（不进库的原因写在 Makefile 注释里） | 通过 |
+| 6. install 装上三个归档 + 三个头文件 | 实测安装树：`include/{sfa.h,sfa_probe.h,sfa_server.h}` + `lib/{libsfa.a,libsfa-server.a,libsfa-all.a}` + `bin/{sfa-server,sfa_client}` | 通过 |
+| 7. 内嵌 e2e | `scripts/test_embedded.sh`：链接 `libsfa-server.a`（调用方自带 main）、与标准 `sfa_client` 互操作（31 条事件、握手 `mode=FILESYSTEM|RENAME_PAIR|ONDIR|PATH_LOOKUP`）、信号停、socket 被清理，**耗时 3 秒** | 通过 |
+| 8. README 增「Embedding the server」含两条约束 | 已增：权限边界（内嵌进程必须持 `CAP_SYS_ADMIN`，只适用于调用方本就是特权守护进程）+ 崩溃域合并 | 通过 |
+
+实测汇总：编译告警 0；`make check`、`make selftest` 通过；四条 e2e 全过、
+`test_slow_client.sh` 6s、`test_delete_paths.sh` 4s、`test_embedded.sh` 3s。
+**未在 ext4 裸机复测。**
+
+### 顺带修掉的两个既有脚本缺陷（本轮实测时踩到）
+
+1. **e2e 脚本在 git 里是 `644`**：`make e2e` 用 `./"$$t"` 执行会 Permission denied
+   —— README 里写的 `make e2e` 在此之前其实跑不起来（之前都是显式 `bash scripts/...`）。
+   已置 `755`，并让 `make e2e` 真正可用。
+2. **cleanup 用裸 `wait` 会让脚本永不返回**：它会等所有子进程，而客户端是长驻进程；
+   `test_slow_client.sh` 里还有被 `SIGSTOP` 的客户端（收到 `TERM` 时信号 pending 但不投递），
+   所以脚本跑到最后会挂住。已改为只 `wait` 自己起过的 PID，且先 `CONT` 再 `TERM`；
+   `make e2e` 给每个脚本套 `timeout $(E2E_TIMEOUT)`（默认 60s），任何挂起都会以
+   非零码报错退出而不是吊住终端。
+
+> 两个缺陷都是「README 承诺了、实现没做到」，与 #3/#8 同类；记在这里是因为它们
+> 是本 issue 实测过程中暴露的，而不是新开一篇 —— 修复范围与手段都落在 scripts/ 与 Makefile 内。

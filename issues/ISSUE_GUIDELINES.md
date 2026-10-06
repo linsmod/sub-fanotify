@@ -103,3 +103,4 @@ verdict:
 | 7 | `open/protocol-reserved-and-versioning.md` | `sfa_event` 没有 reserved 字段、版本校验不协商 | P2 |
 | 8 | `closed/dist-misses-issue-subdirs.md` | `make dist` 的 `wildcard` 不递归，`issues/open/` 一篇都没进发行包 | P1 |
 | 9 | `closed/client-visible-work-mode.md` | 客户端看不到服务端工作模式（MOUNT/FILESYSTEM 等），连接时只能反推 | P2 |
+| 10 | `closed/embedded-server-library.md` | 客户要把 server 能力嵌进自己进程：server 逻辑全在 `main()` 里，无法复用 | P1 |
