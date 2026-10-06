@@ -96,9 +96,9 @@ verdict:
 |---|---|---|---|
 | 1 | `closed/blocking-send-backpressure.md` | 广播用阻塞 send，慢客户端能卡住整个 fanotify 循环 | P0 |
 | 2 | `closed/silent-event-loss.md` | 路径反解失败时事件被静默丢弃 | P0 |
-| 3 | `open/socket-permissions.md` | socket 权限 0600，非特权客户端连不上 | P0 |
-| 4 | `open/subscribe-prefix-filter.md` | 订阅无前缀过滤（保留服务端 `--prefix`；协议过滤已拆为 #6） | P2 |
-| 5 | `open/dfid-record-order-unknown.md` | 带 `FAN_REPORT_FID` 时 `find_fid_info` 匹配到哪条记录未定，DELETE 路径可能带 ` (deleted)` | P3 |
+| 3 | `closed/socket-permissions.md` | socket 权限 0600，非特权客户端连不上 | P0 |
+| 4 | `closed/subscribe-prefix-filter.md` | 订阅无前缀过滤（保留服务端 `--prefix`；协议过滤已拆为 #6） | P2 |
+| 5 | `closed/dfid-record-order-unknown.md` | 带 `FAN_REPORT_FID` 时 `find_fid_info` 匹配到哪条记录未定，DELETE 路径可能带 ` (deleted)` | P3 |
 | 6 | `open/protocol-prefix-filter.md` | 协议级前缀过滤：改消息形状要全量重连 | P2 |
 | 7 | `open/protocol-reserved-and-versioning.md` | `sfa_event` 没有 reserved 字段、版本校验不协商 | P2 |
-| 8 | `open/dist-misses-issue-subdirs.md` | `make dist` 的 `wildcard` 不递归，`issues/open/` 一篇都没进发行包 | P1 |
+| 8 | `closed/dist-misses-issue-subdirs.md` | `make dist` 的 `wildcard` 不递归，`issues/open/` 一篇都没进发行包 | P1 |

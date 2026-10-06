@@ -1,12 +1,12 @@
 ---
 id: 8
-status: accepted
+status: closed
 type: bug
 priority: P1
 created: 2026-10-06
-closed:
+closed: 2026-10-06
 commit: 4fda81569092
-verdict:
+verdict: ISSUES 递归收集并保留 open/closed 目录结构，五项验收全过（含两次 make dist sha256 一致的确定性实测）
 ---
 
 # `make dist` 不打包 `issues/open/`：known-limitations 文档根本没进发行包

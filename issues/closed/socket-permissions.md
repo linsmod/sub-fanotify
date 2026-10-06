@@ -1,12 +1,12 @@
 ---
 id: 3
-status: accepted
+status: closed
 type: bug
 priority: P0
 created: 2026-10-06
-closed:
+closed: 2026-10-06
 commit: 4fda81569092
-verdict:
+verdict: --group 落地（0660 root:GROUP，chown 先于 chmod，未知组即退出），六项验收含非 root 客户端实测全过；默认 0600 行为不变
 ---
 
 # socket 权限 0600 让「无特权索引器」连不上

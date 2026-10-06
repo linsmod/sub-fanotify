@@ -1,12 +1,12 @@
 ---
 id: 5
-status: accepted
+status: closed
 type: bug
 priority: P3
 created: 2026-10-06
-closed:
-commit:
-verdict:
+closed: 2026-10-06
+commit: d2083a2
+verdict: find_fid_info 收紧为显式类型匹配（优先 DFID_NAME，退 DFID/FID），隐式记录顺序前提变为显式契约；新增 test_delete_paths.sh 一次性检查，e2e 实测 DELETE 40 条无 (deleted)
 ---
 
 # `find_fid_info` 匹配到哪条 info 记录未定：DELETE 的路径可能带 ` (deleted)`
@@ -169,3 +169,18 @@ NEXT（验收标准）：
 **给后来人的话**：这个否证本身是有价值的结论 —— 它把一条「每次删除都可能是假路径」
 的疑似 P1 降成了「一个有文档的隐式前提」，但前提仍然要写下来。**不要因为假设被否就
 删掉本篇**：否证的过程和判别方法比结论更耐用。
+## 修复与实测（2026-10-06）
+
+四项验收逐条落实，commit `d2083a2`：
+
+| 验收标准 | 实现 / 实测 | |
+|---|---|---|
+| 1. 非 rename 分支按记录类型显式取 | `find_fid_info(meta, FAN_EVENT_INFO_TYPE_DFID_NAME)`，无则退 DFID、再退 FID；`is_dirent = (拿到的是 DFID_NAME)` | 通过 |
+| 2. 注释写明依赖的记录顺序与翻转症状 | `find_fid_info` 重写为必须显式给类型，type=0 宽松分支已删除；注释写明旧实现隐式依赖 DFID_NAME 在前、翻转后症状是 DELETE 路径带 " (deleted)"、不报错不崩只是内容错，并指向本篇存档 | 通过 |
+| 3. 实测判据变成可重复检查 | 新增 `scripts/test_delete_paths.sh`（40 文件先建后删，断言 0 条 "(deleted)"），随 `make e2e` 运行 | 通过 |
+| 4. 与 #2 的 helper 收敛一起做 | #2 的 loss_stats 已在 bdc50bf 落地；本篇改动只动 fid 选取，loss 路径不受影响，回归通过 | 通过 |
+
+实测（WSL2 `6.18.40.1-microsoft-standard-WSL2`，root）：新脚本 DELETE 40 条、"(deleted)" 0 条，
+路径样例正确；`make check`、`selftest` 10/10、另两条 e2e 无退化。未在 ext4 裸机复测。
+
+按「给后来人的话」保留本篇全部正文：否证的判别方法（看 DELETE 行末尾）比结论耐用。
