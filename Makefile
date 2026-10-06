@@ -2,6 +2,16 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -g -Wall -Wextra -Wno-unused-parameter
 LDFLAGS ?=
 
+# 安装位置（GNU 惯例）：PREFIX 是最终前缀，DESTDIR 只用于打包暂存。
+# 下游可以整条命令行覆盖，例如：
+#   make install PREFIX=$HOME/.local          # 装到自己的 prefix
+#   make install PREFIX=/usr DESTDIR=/tmp/stage   # 打包暂存到 /tmp/stage/usr/...
+PREFIX     ?= /usr/local
+DESTDIR    ?=
+INCLUDEDIR ?= $(PREFIX)/include
+LIBDIR     ?= $(PREFIX)/lib
+BINDIR     ?= $(PREFIX)/bin
+
 all: sfa-server sfa_client
 
 sfa-server: sfa-server.c sfa_probe.c sfa.h sfa_probe.h
@@ -18,6 +28,27 @@ libsfa.a: libsfa.c sfa.h
 
 clean:
 	rm -f sfa-server sfa_client libsfa.a libsfa.o
+
+# 安装给下游 consumer：协议头 sfa.h（契约）与客户端 SDK 静态库 libsfa.a。
+# sfa_probe.h 一并装 —— 它只服务端用，但下游若要自己包一层 fanotify 逻辑会需要。
+# 可执行文件（sfa-server/sfa_client）不在此目标内：它们是部署物不是开发依赖，
+# 需要的话用 make install-bin。
+install: libsfa.a
+	@mkdir -p "$(DESTDIR)$(INCLUDEDIR)" "$(DESTDIR)$(LIBDIR)"
+	install -m 0644 sfa.h sfa_probe.h "$(DESTDIR)$(INCLUDEDIR)/"
+	install -m 0644 libsfa.a "$(DESTDIR)$(LIBDIR)/"
+	@echo "installed: $(DESTDIR)$(INCLUDEDIR)/{sfa.h,sfa_probe.h}"
+	@echo "installed: $(DESTDIR)$(LIBDIR)/libsfa.a"
+
+install-bin: all
+	@mkdir -p "$(DESTDIR)$(BINDIR)"
+	install -m 0755 sfa-server sfa_client "$(DESTDIR)$(BINDIR)/"
+	@echo "installed: $(DESTDIR)$(BINDIR)/{sfa-server,sfa_client}"
+
+uninstall:
+	rm -f "$(DESTDIR)$(INCLUDEDIR)/sfa.h" "$(DESTDIR)$(INCLUDEDIR)/sfa_probe.h"
+	rm -f "$(DESTDIR)$(LIBDIR)/libsfa.a"
+	@echo "uninstalled from $(DESTDIR)$(PREFIX)"
 
 # 语法/语义检查：只编译不链接，快速验证改动
 check: sfa.h sfa_probe.h
@@ -116,4 +147,4 @@ dist: all libsfa.a
 distclean: clean
 	rm -rf $(DISTDIR)
 
-.PHONY: all clean check selftest probe dist distclean
+.PHONY: all clean check selftest e2e probe install install-bin uninstall dist distclean

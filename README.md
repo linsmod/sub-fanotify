@@ -61,12 +61,30 @@ should treat it the same as `SFA_EV_OVERFLOW`: resync with a full pass.
 make            # sfa-server and sfa_client
 make check      # -fsyntax-only over every translation unit, no link, no artefacts
 make selftest   # built-in self-check (pure logic, needs no privileges)
+make e2e        # end-to-end scripts (needs root + fanotify)
 make probe P=/  # capability report for a mount point
-make dist      # taggable source tarball, version = git describe (+ -dirty)
+make install    # sfa.h, sfa_probe.h and libsfa.a for downstream consumers
+make dist       # source package + prebuilt package, version = git describe (+ -dirty)
 make clean
 ```
 
 Requires GCC or Clang with C11 and `make`.
+
+`make install` follows the usual conventions, so a downstream can put the SDK
+wherever it wants:
+
+```sh
+make install                                # → /usr/local/{include,lib}
+make install PREFIX=$HOME/.local            # own prefix
+make install PREFIX=/usr DESTDIR=/tmp/stage # staged root for packaging
+make install-bin                            # also the two executables → $(PREFIX)/bin
+make uninstall
+```
+
+It installs the contract (`sfa.h`), the probe header (`sfa_probe.h`, server-side
+but handy for anyone wrapping fanotify) and the client SDK (`libsfa.a`);
+`make install` deliberately leaves the `sfa-server`/`sfa_client` executables
+alone — they are deployment artefacts, not development dependencies.
 
 ## Releases
 
