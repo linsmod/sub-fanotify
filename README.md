@@ -63,7 +63,7 @@ make check      # -fsyntax-only over every translation unit, no link, no artefac
 make selftest   # built-in self-check (pure logic, needs no privileges)
 make e2e        # end-to-end scripts (needs root + fanotify)
 make probe P=/  # capability report for a mount point
-make install    # sfa.h, sfa_probe.h and libsfa.a for downstream consumers
+make install    # headers, libsfa.a and the two executables
 make dist       # source package + prebuilt package, version = git describe (+ -dirty)
 make clean
 ```
@@ -74,17 +74,17 @@ Requires GCC or Clang with C11 and `make`.
 wherever it wants:
 
 ```sh
-make install                                # → /usr/local/{include,lib}
+make install                                # → /usr/local/{include,lib,bin}
 make install PREFIX=$HOME/.local            # own prefix
 make install PREFIX=/usr DESTDIR=/tmp/stage # staged root for packaging
-make install-bin                            # also the two executables → $(PREFIX)/bin
+make install-bin                            # only the two executables → $(PREFIX)/bin
 make uninstall
 ```
 
 It installs the contract (`sfa.h`), the probe header (`sfa_probe.h`, server-side
-but handy for anyone wrapping fanotify) and the client SDK (`libsfa.a`);
-`make install` deliberately leaves the `sfa-server`/`sfa_client` executables
-alone — they are deployment artefacts, not development dependencies.
+but handy for anyone wrapping fanotify), the client SDK (`libsfa.a`) and the
+`sfa-server`/`sfa_client` executables — `install-bin` is the same minus the
+development files, for machines that only run the proxy.
 
 ## Releases
 

@@ -29,16 +29,17 @@ libsfa.a: libsfa.c sfa.h
 clean:
 	rm -f sfa-server sfa_client libsfa.a libsfa.o
 
-# 安装给下游 consumer：协议头 sfa.h（契约）与客户端 SDK 静态库 libsfa.a。
-# sfa_probe.h 一并装 —— 它只服务端用，但下游若要自己包一层 fanotify 逻辑会需要。
-# 可执行文件（sfa-server/sfa_client）不在此目标内：它们是部署物不是开发依赖，
-# 需要的话用 make install-bin。
-install: libsfa.a
-	@mkdir -p "$(DESTDIR)$(INCLUDEDIR)" "$(DESTDIR)$(LIBDIR)"
+# 安装：协议头 sfa.h（契约）+ sfa_probe.h（服务端用，下游要包 fanotify 也需要）
+# + 客户端 SDK 静态库 libsfa.a + 两个可执行文件。
+# install-bin 只装可执行文件（只要部署物、不做开发的场景）。
+install: all libsfa.a
+	@mkdir -p "$(DESTDIR)$(INCLUDEDIR)" "$(DESTDIR)$(LIBDIR)" "$(DESTDIR)$(BINDIR)"
 	install -m 0644 sfa.h sfa_probe.h "$(DESTDIR)$(INCLUDEDIR)/"
 	install -m 0644 libsfa.a "$(DESTDIR)$(LIBDIR)/"
+	install -m 0755 sfa-server sfa_client "$(DESTDIR)$(BINDIR)/"
 	@echo "installed: $(DESTDIR)$(INCLUDEDIR)/{sfa.h,sfa_probe.h}"
 	@echo "installed: $(DESTDIR)$(LIBDIR)/libsfa.a"
+	@echo "installed: $(DESTDIR)$(BINDIR)/{sfa-server,sfa_client}"
 
 install-bin: all
 	@mkdir -p "$(DESTDIR)$(BINDIR)"
@@ -48,6 +49,7 @@ install-bin: all
 uninstall:
 	rm -f "$(DESTDIR)$(INCLUDEDIR)/sfa.h" "$(DESTDIR)$(INCLUDEDIR)/sfa_probe.h"
 	rm -f "$(DESTDIR)$(LIBDIR)/libsfa.a"
+	rm -f "$(DESTDIR)$(BINDIR)/sfa-server" "$(DESTDIR)$(BINDIR)/sfa_client"
 	@echo "uninstalled from $(DESTDIR)$(PREFIX)"
 
 # 语法/语义检查：只编译不链接，快速验证改动
