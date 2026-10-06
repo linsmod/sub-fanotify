@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* embed_server_demo.c - 内嵌 server 的最小示例（issue #10 的 e2e 用）
  *
  * 用法：embed_server_demo <mount> <socket> [mount2 socket2] [--events]

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* sfa_client.c - 示例客户端：连接并打印事件 */
 #define _GNU_SOURCE
 #include "sfa.h"

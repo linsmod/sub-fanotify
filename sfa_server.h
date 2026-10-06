@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* sfa_server.h - 把特权 fanotify 代理嵌进调用方进程（issue #10）
  *
  * 用法骨架：

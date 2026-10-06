@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 linsmod <linsmod@qq.com>
 # e2e（issue #2）：rm -rf 一棵子树后，路径反解失败的事件不再静默丢弃 ——
 # 客户端必须收到 UNRESOLVED 信号事件，服务端 stderr 必须有按批次聚合的
 # 丢失计数（含 errno 分布）。

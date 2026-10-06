@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 linsmod <linsmod@qq.com>
 # e2e（issue #1）：一个不读数据的客户端（SIGSTOP 造出）不能拖住其他订阅者。
 #
 # 修复前（阻塞 send）的实测基线：A 被 STOP 后，健康客户端 B 收到约 26 条就

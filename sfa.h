@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* sfa.h - SFA 协议定义（服务端与客户端共享） */
 #ifndef SFA_H
 #define SFA_H

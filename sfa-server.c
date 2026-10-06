@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* sfa-server.c - CLI 包装：特权 fanotify 代理
  *
  * 服务器逻辑全在 sfa_server.c（库）里，这里只做三件事：解析参数、装信号处理、

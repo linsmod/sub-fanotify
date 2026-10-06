@@ -271,3 +271,10 @@ inexplicably.
 
 ## Owner/Maintanier should knows
 Check AGENTS.md for requirements & details
+
+## License
+
+MIT, © 2026 linsmod — `LICENSE` holds the text, and every source file carries the
+`SPDX-License-Identifier` line. The same licence as esidx, deliberately: this library is
+compiled into that binary, and two licences inside one executable is a question nobody should
+have to answer.

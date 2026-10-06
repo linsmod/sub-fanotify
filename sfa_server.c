@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* sfa_server.c - 特权 fanotify 代理的库实现（issue #10）
  *
  * 逻辑与行为与 CLI（sfa-server.c）共用同一份实现：CLI 只是薄包装。

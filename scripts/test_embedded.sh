@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 linsmod <linsmod@qq.com>
 # e2e（issue #10）：把 server 库嵌进调用方进程，与普通客户端互操作。
 #
 # 验证四件事：

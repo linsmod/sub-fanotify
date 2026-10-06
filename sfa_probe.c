@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* sfa_probe.c - fanotify 能力探测（只探测本实现真正用到的部分） */
 #define _GNU_SOURCE
 #include "sfa_probe.h"

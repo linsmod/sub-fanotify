@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 linsmod <linsmod@qq.com>
 # e2e（issue #5）：DELETE 事件的路径不得带 " (deleted)" 后缀。
 #
 # 背景：sfa-server 曾用 find_fid_info(meta, 0) 宽松匹配任意 fid 记录，

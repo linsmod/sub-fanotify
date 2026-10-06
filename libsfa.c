@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 linsmod <linsmod@qq.com>
+ */
 /* libsfa.c - 客户端 SDK 实现 */
 #define _GNU_SOURCE
 #include "sfa.h"
