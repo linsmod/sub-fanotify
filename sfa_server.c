@@ -66,6 +66,11 @@ struct sfa_srv {
 
     volatile sig_atomic_t stop;
 
+    /* 进程内订阅者：不经 socket，同步回调（见 sfa_server.h 的契约） */
+    void      (*cb)(void *user, const struct sfa_event *ev);
+    void       *cb_user;
+    uint32_t    cb_mask;
+
     void      (*log)(void *user, const char *msg);
     void       *log_user;
 
@@ -293,6 +298,15 @@ static void broadcast(struct sfa_srv *s, const struct sfa_event *ev)
             }
         }
     }
+
+    /* 进程内订阅者：同步回调，与 socket 订阅者共用同一套过滤语义
+     * （掩码、prefix、以及 OVERFLOW/UNRESOLVED 这类无路径的丢失信号）。
+     * 它没有缓冲，所以不存在 desync 形态；代价是回调慢会推迟内核事件读取 ——
+     * 契约写在 sfa_server.h，不在这里兜底。 */
+    if (s->cb && (s->cb_mask & ev->mask)) {
+        int filtered = s->nprefix && ev->path[0] && !path_allowed(s, ev->path);
+        if (!filtered) s->cb(s->cb_user, ev);
+    }
 }
 
 /* 批次收尾：有丢失就向客户端发一条 UNRESOLVED 信号事件，stderr 打一行计数。
@@ -412,6 +426,9 @@ int sfa_srv_open(struct sfa_srv **out, const struct sfa_srv_opts *opts)
     s->mount_fd = s->fan_fd = s->listen_fd = s->wake_r = s->wake_w = -1;
     s->log      = opts->log;
     s->log_user = opts->log_user;
+    s->cb        = opts->on_event;
+    s->cb_user   = opts->on_event_user;
+    s->cb_mask   = opts->on_event ? opts->on_event_mask : 0;
 
     snprintf(s->mount, sizeof(s->mount), "%s", opts->mount);
     snprintf(s->sock,  sizeof(s->sock),  "%s",
@@ -556,6 +573,16 @@ int sfa_srv_fd(const struct sfa_srv *s)
 const char *sfa_srv_error(const struct sfa_srv *s)
 {
     return s ? s->err : "";
+}
+
+const char *sfa_srv_mount(const struct sfa_srv *s)
+{
+    return s ? s->mount : "";
+}
+
+uint32_t sfa_srv_work_flags(const struct sfa_srv *s)
+{
+    return s ? s->welcome_flags : 0;
 }
 
 /* ---- 主循环 ---- */

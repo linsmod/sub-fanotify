@@ -175,6 +175,17 @@ self-pipe that wakes `poll`), so it can be called from a signal handler or from
 another thread. To drive it from your own event loop, poll `sfa_srv_fd()` and
 then call `sfa_srv_poll(srv, 0)`. Several instances can coexist in one process.
 
+A single process does not have to talk to itself over the socket: set
+`opts.on_event` and events are delivered to your callback directly, with the same
+filtering (mask, `--prefix`, and the loss signals `OVERFLOW`/`UNRESOLVED`) as
+socket subscribers get. `sfa_srv_mount()` / `sfa_srv_work_flags()` are the
+in-process equivalents of the `welcome` handshake.
+
+**The callback runs inside the fanotify read loop, so it must be fast and must
+not block.** A slow callback delays reading kernel events, which is how the
+stall of #1 and the silent loss of #2 would come back through a new door — hand
+work off to your own thread and return.
+
 Everything lives in the one archive: link `libsfa.a`. Static archives are pulled
 in per object file, so a client that only calls `sfa_connect` does **not** drag
 the server objects (or their fanotify dependency) into its binary — the linker

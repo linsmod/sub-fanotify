@@ -47,6 +47,21 @@ struct sfa_srv_opts {
      * 它在主循环里被调用。能力探测报告也会走这里。 */
     void      (*log)(void *user, const char *msg);
     void       *log_user;
+
+    /* 进程内订阅：事件不经 socket，按 mask 过滤后**同步回调**（issue #10 后续，
+     * 单进程消费者不必再连自己的 socket）。NULL 表示不用这条通路。
+     *
+     * **回调必须快且不得阻塞**：它在 fanotify 读循环里执行，慢回调会推迟内核
+     * 事件的读取，把缓冲压力交给内核队列 —— 句柄随之过期，于是把 #1（停摆）与
+     * #2（静默丢失）的形态从 socket 换到进程内重演。要解耦请自行入队到自己的
+     * 线程，别在回调里做重活。
+     *
+     * 与 socket 订阅者共用同一套语义：掩码过滤、prefix 裁剪、丢失信号
+     * （OVERFLOW/UNRESOLVED）都会送到这里，所以进程内消费者不会成为唯一
+     * 发现不了丢失的人。回调里只允许调用 sfa_srv_stop() 与只读访问者。 */
+    void      (*on_event)(void *user, const struct sfa_event *ev);
+    void       *on_event_user;
+    uint32_t    on_event_mask;      /* 0 = 不回调；通常用 SFA_EV_ALL */
 };
 
 struct sfa_srv;                     /* opaque */
@@ -71,6 +86,11 @@ int  sfa_srv_stopped(const struct sfa_srv *s);
 
 /* fanotify 事件 fd，供调用方并入自己的 poll/epoll；配合 sfa_srv_poll(s, 0) 使用。 */
 int  sfa_srv_fd(const struct sfa_srv *s);
+
+/* 被监控的挂载点 / 协商出的工作模式（SFA_WF_*）。
+ * 走 socket 的客户端从 welcome 拿这两样，进程内订阅者用这两个入口。 */
+const char *sfa_srv_mount(const struct sfa_srv *s);
+uint32_t    sfa_srv_work_flags(const struct sfa_srv *s);
 
 void sfa_srv_close(struct sfa_srv *s);
 

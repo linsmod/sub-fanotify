@@ -167,3 +167,19 @@ server / probe 成员拉进它的二进制。实测：一个只调用客户端 A
 验收 5 相应改为：单一 `libsfa.a` 不含 `main`（实测 0 个），且只订阅的消费方链接后
 不含 fanotify / `sfa_srv_*` 符号（实测无）。其余七条不变，e2e 全过（内嵌 e2e 改为
 链接 `libsfa.a`）。`make install` / `make dist` 同步为单一库形态，已实测。
+
+## 补记（2026-10-06）：进程内订阅，单进程不必连自己的 socket
+
+客户提出这一点，评估后采纳，**不开新 issue**：`sfa_srv_opts` 增加
+`on_event` / `on_event_user` / `on_event_mask`，事件按与 socket 订阅者**相同的过滤语义**
+（掩码、`--prefix`、以及 OVERFLOW/UNRESOLVED 这类丢失信号）同步回调投递；
+另加 `sfa_srv_mount()` / `sfa_srv_work_flags()` 作为 `welcome` 的进程内等价入口。
+
+代价写在接口上，不藏：**回调在 fanotify 读循环里执行，必须快且不得阻塞**。
+慢回调会推迟内核事件读取，把 #1 的停摆与 #2 的静默丢失从 socket 换成进程内重演
+（契约见 `sfa_server.h` 注释与 README「Embedding the server」）。要解耦请自行入队
+到自己的线程，别在回调里做重活；环形缓冲式的异步交付属于将来真出现慢消费者时的事。
+
+验证（WSL2，root）：`scripts/test_embedded.sh` 第三阶段在**没有任何 socket 客户端**
+的情况下，进程内回调收到 21 条事件；三阶段（socket 互操作 / 双实例隔离 / 进程内订阅）
+全过，耗时 5s，编译告警 0。

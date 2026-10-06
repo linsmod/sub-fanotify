@@ -96,5 +96,20 @@ echo "（实例1 另见同文件系统上 mnt2 的路径 $CROSS 条；FILESYSTEM
 kill -TERM $D2 2>/dev/null; wait $D2 2>/dev/null; DRC2=$?
 [ "$DRC2" -eq 0 ] || { echo "FAIL: 双实例退出码 $DRC2（stop 未覆盖两个实例？）"; FAIL=1; }
 
-[ $FAIL -eq 0 ] && echo "PASS: server 库可内嵌，客户端互操作、双实例隔离与停止语义正常"
+# ---- #10 后续：进程内订阅（事件不经 socket，单进程不必连自己）----
+MNT3=$TMP/mnt3; SOCK3=$TMP/sfa3.sock
+mkdir -p "$MNT3"
+"$TMP/demo" "$MNT3" "$SOCK3" --events >"$TMP/demo3.out" 2>"$TMP/demo3.err" & D3=$!
+PIDS="$PIDS $D3"
+for i in $(seq 50); do [ -S "$SOCK3" ] && break; sleep 0.1; done
+sleep 0.3
+for i in $(seq 1 10); do echo x > "$MNT3/c$i"; done
+sleep 1
+
+IN=$(grep -c "^EVENT " "$TMP/demo3.out" 2>/dev/null || true)
+echo "进程内订阅（全程没有 socket 客户端）：收到事件 $IN 条"
+[ "$IN" -ge 8 ] || { echo "FAIL: 进程内回调未收到事件"; cat "$TMP/demo3.err"; FAIL=1; }
+kill -TERM $D3 2>/dev/null; wait $D3 2>/dev/null
+
+[ $FAIL -eq 0 ] && echo "PASS: server 库可内嵌（socket 互操作 / 双实例隔离 / 进程内订阅），停止语义正常"
 exit $FAIL

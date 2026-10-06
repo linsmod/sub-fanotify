@@ -1,9 +1,10 @@
 /* embed_server_demo.c - 内嵌 server 的最小示例（issue #10 的 e2e 用）
  *
- * 用法：embed_server_demo <mount> <socket> [mount2 socket2]
+ * 用法：embed_server_demo <mount> <socket> [mount2 socket2] [--events]
  * 行为：用 sfa_srv_* 在同一进程里起 watcher（给第二组参数则**同时开两个实例**，
- *       用来验证实例间没有共享状态）；收到 SIGINT/SIGTERM 时在信号处理器里调用
- *       sfa_srv_stop()，主循环退出后 sfa_srv_close() 清理。
+ *       用来验证实例间没有共享状态；--events 则注册进程内回调，事件不经 socket）；
+ *       收到 SIGINT/SIGTERM 时在信号处理器里调用 sfa_srv_stop()，主循环退出后
+ *       sfa_srv_close() 清理。
  * 退出码：0 = 正常停止；1 = 启动/运行失败。
  *
  * 这正是下游客户的形态：调用方自己就是特权守护进程，watcher 是它的一个组件。
@@ -30,20 +31,39 @@ static void on_log(void *user, const char *msg)
     fprintf(stderr, "[demo%s] %s\n", (const char *)user, msg);
 }
 
+/* 进程内订阅回调：**只做打印**（真实消费者应入队到自己的线程，别在这里做重活）。 */
+static void on_event(void *user, const struct sfa_event *ev)
+{
+    char names[128];
+    printf("EVENT %s %s\n", sfa_event_names(ev->mask, names, sizeof(names)),
+           ev->path[0] ? ev->path : "(无路径)");
+    fflush(stdout);
+    (void)user;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "用法: %s <mount> <socket> [mount2 socket2]\n", argv[0]);
+        fprintf(stderr, "用法: %s <mount> <socket> [mount2 socket2] [--events]\n", argv[0]);
         return 1;
     }
 
-    int two = argc >= 5;
+    /* --events：注册进程内订阅（不经 socket 收事件），用于 e2e 断言 */
+    int want_events = 0;
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--events")) want_events = 1;
+
+    int two = argc >= 5 && argv[3][0] != '-';
     struct sfa_srv_opts opts = {
         .mount   = argv[1],
         .sock    = argv[2],
         .log     = on_log,
         .log_user = (void *)"",
     };
+    if (want_events) {
+        opts.on_event      = on_event;
+        opts.on_event_mask = SFA_EV_ALL;
+    }
     if (sfa_srv_open(&g_srv[0], &opts) < 0) {
         fprintf(stderr, "sfa_srv_open: %s\n", sfa_srv_error(g_srv[0]));
         return 1;
