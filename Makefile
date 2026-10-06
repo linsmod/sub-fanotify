@@ -74,7 +74,7 @@ PKGNAME   := sfa-$(VERSION)
 STAGE     := $(DISTDIR)/.stage-$(PKGNAME)
 PKG       := $(DISTDIR)/$(PKGNAME).tar.gz
 
-# 编译包：include/ + lib/（头文件、静态 SDK、两个可执行文件）。
+# 编译包：include/（头文件）+ lib/（静态 SDK）+ bin/（可执行文件）。
 # 内容随编译环境（编译器版本、libc、内核头）变化，不承诺跨机字节一致；
 # 源码包保持确定性（同 commit 同字节），可复现构建请用源码包。
 BINNAME   := sfa-$(VERSION)-bin
@@ -96,9 +96,11 @@ dist: all libsfa.a
 	@printf '%s\n' '$(VERSION)' > "$(STAGE)/$(PKGNAME)/VERSION"
 	@tar --sort=name --owner=0 --group=0 --numeric-owner \
 	     --mtime='@$(MTIME)' -C "$(STAGE)" -czf "$(PKG)" "$(PKGNAME)"
-	@mkdir -p "$(BINSTAGE)/$(BINNAME)/include" "$(BINSTAGE)/$(BINNAME)/lib"
+	@mkdir -p "$(BINSTAGE)/$(BINNAME)/include" "$(BINSTAGE)/$(BINNAME)/lib" \
+	          "$(BINSTAGE)/$(BINNAME)/bin"
 	@cp sfa.h sfa_probe.h "$(BINSTAGE)/$(BINNAME)/include/"
-	@cp libsfa.a sfa-server sfa_client "$(BINSTAGE)/$(BINNAME)/lib/"
+	@cp libsfa.a "$(BINSTAGE)/$(BINNAME)/lib/"
+	@cp sfa-server sfa_client "$(BINSTAGE)/$(BINNAME)/bin/"
 	@printf '%s\n' '$(VERSION)' > "$(BINSTAGE)/$(BINNAME)/VERSION"
 	@tar --sort=name --owner=0 --group=0 --numeric-owner \
 	     --mtime='@$(MTIME)' -C "$(BINSTAGE)" -czf "$(BINPKG)" "$(BINNAME)"

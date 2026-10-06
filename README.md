@@ -76,7 +76,7 @@ Requires GCC or Clang with C11 and `make`.
   this README and `issues/` (the known-limitations document). Rebuild everything
   from it with `make`.
 - `sfa-<version>-bin.tar.gz` — the **prebuilt package**, structured as an SDK:
-  `include/` (`sfa.h`, `sfa_probe.h`) and `lib/` (`libsfa.a` plus the
+  `include/` (`sfa.h`, `sfa_probe.h`), `lib/` (`libsfa.a`) and `bin/` (the
   `sfa-server` and `sfa_client` executables). Its bytes depend on the build
   environment (compiler, libc, kernel headers).
 
