@@ -9,15 +9,23 @@ Written in C11, no runtime dependencies beyond libc. Target: Linux (ext4).
 
 ## What this is for
 
-`esidx` keeps a search index in line with the filesystem by walking it. A walk
-that skips unchanged directories is 0.1 ms idle, but it only sees *names*: a file
-edited in place changes nothing its parent can see. That gap is what SFA closes —
-it reports every event as it happens, as an absolute path.
+The motivating case is a search index kept in line with the filesystem by
+walking it. A walk that prunes unchanged directories is cheap — a fraction of a
+millisecond when nothing has changed — but it only ever sees *names*: a file
+edited in place changes nothing its parent can see. That gap is what this closes,
+reporting every event as it happens, as an absolute path.
+
+SFA is developed for that case but is not tied to one indexer. What it offers is
+the part that is hard to get right — a privileged capture process, and a wire
+protocol between it and whoever consumes the events — so that anything keeping
+derived state in step with the filesystem can use it.
 
 The split is deliberate. The watcher needs `CAP_SYS_ADMIN`; the indexer must not
 have it. So one small privileged process (`sfa-server`) holds the fanotify group
 and rebroadcasts events over an `AF_UNIX`/`SOCK_SEQPACKET` socket, and any number
-of unprivileged clients subscribe with a bitmask. This repository is the whole of
+of unprivileged clients subscribe with a bitmask. The socket is `0600 root:root`
+unless the server is started with `--group <name>`, which makes it `0660` and
+owned by that group — see [Usage](#usage). This repository is the whole of
 that: the proxy, the protocol, a ~100-line client SDK and a sample client.
 
 ## Status
@@ -33,16 +41,47 @@ support, and the server refuses to start if the answer is no.
 | `FAN_RENAME` + `FAN_REPORT_TARGET_FID` | kernel 5.17+ | falls back to pairing `MOVED_FROM`/`MOVED_TO` |
 | `FAN_ONDIR` | kernel 5.1+ | `mkdir`/`rmdir`/directory rename are filtered out by the kernel |
 
+`FAN_MARK_FILESYSTEM` is a **fallback**, not an equivalent substitute for
+`FAN_MARK_MOUNT`: it covers the whole filesystem rather than the mount point, and
+it can engage backends that do not support exportfs. `--probe` reports both
+(`MOUNT n/7, FILESYSTEM m/7`) so the coverage difference is visible before you
+rely on it. Use `--prefix` to narrow what reaches clients.
+
 ## Build
 
 ```sh
 make            # sfa-server and sfa_client
 make check      # -fsyntax-only over every translation unit, no link, no artefacts
+make selftest   # built-in self-check (pure logic, needs no privileges)
 make probe P=/  # capability report for a mount point
+make dist      # taggable source tarball, version = git describe (+ -dirty)
 make clean
 ```
 
 Requires GCC or Clang with C11 and `make`.
+
+## Releases
+
+`make dist` writes `dist/sfa-<version>.tar.gz` plus a `.sha256` next to it. The
+version string is `git describe` — `v1.2.0-3-gdeadbee`, or the bare commit hash
+before the first tag — so a package always names the tree it came from.
+
+**Any uncommitted change to a tracked *or* untracked file appends `-dirty`.** Such
+a package is for your own testing; do not hand it out. Untracked files count
+because they land in the tarball just as tracked ones do.
+
+```sh
+make dist
+sha256sum -c dist/sfa-<version>.tar.gz.sha256
+tar xzf dist/sfa-<version>.tar.gz
+cat dist/sfa-<version>/VERSION       # same string, for the record
+```
+
+Owner and mtime are pinned to the commit's committer date, so the same commit
+reproduces the same bytes. Only committed files are packed: untracked ones are
+reported by `make dist` and left out, because packing them would make one commit
+produce two different tarballs. `issues/` is the known-limitations document for a
+release and travels with the package once it is committed.
 
 ## Usage
 
@@ -58,12 +97,26 @@ Requires GCC or Clang with C11 and `make`.
 sudo ./sfa-server /                       # default socket /run/sfa.sock
 ./sfa-server /data /tmp/sfa.sock          # explicit mount and socket
 
+# let a specific group of unprivileged users in. The socket stays 0660 root:GROUP —
+# events leak every filename on the filesystem, so world-readable is not an option,
+# and the client user must be a member of GROUP.
+sudo ./sfa-server / --group esidx
+#   sfa-server: mount=/ socket=/run/sfa.sock mode=0660 owner=root:esidx
+
+# only forward events under these prefixes (repeatable, matched by path component)
+sudo ./sfa-server / --prefix /home --prefix /srv
+
 # watch it, unprivileged
 ./sfa_client                              # default socket
 ./sfa_client /tmp/sfa.sock
 #   CREATE|CLOSE_WRITE|ATTRIB       pid=31337      path=/data/a.txt
 #   MOVED                          pid=31337      path=/data/b.txt  old=/data/a.txt
 ```
+
+Without `--group` the socket is `0600 root:root`, which means only root can
+connect. That is the safe default, and it is also why a non-root client needs
+`--group` on the server side: group membership is a deployment concern, not
+something the proxy can grant.
 
 ## Protocol
 
@@ -113,9 +166,22 @@ sfa_client.c sample client: connect, subscribe, print
 `SFA_SOCKET_PATH` is `/run/sfa.sock`, overridable by the server's second
 argument and the client's first.
 
-## Environment
+## Independence
 
-This directory is its own git repository, nested inside the `esidx` repository
-one level up — it shares no history with it and is versioned independently.
-The watcher is a separate concern from the indexer it feeds; that separation is
-the reason it is not a translation unit inside `esidx`.
+This is a standalone project: its own repository, its own history, its own release
+versions. It is not a component of the indexer it serves — the split described
+above is the reason that separation exists.
+
+Being checked out inside a larger working tree is a placement decision, not a
+dependency. Nothing here compiles against, links against, or is imported by
+whatever hosts it; `make dist` produces a self-contained tarball that builds on
+its own, which is the practical test of that claim.
+
+The consequence worth stating plainly: `sfa.h` is the contract, not any consumer's
+source tree. Breaking changes go through a protocol version bump, and
+`sfa_connect()` refuses a version it does not know rather than behaving
+inexplicably.
+
+
+## Owner/Maintanier should knows
+Check AGENTS.md for requirements & details

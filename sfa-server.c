@@ -18,9 +18,11 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <grp.h>
 
 #define MAX_CLIENTS      64
 #define EVENT_BUF_SIZE   (64 * 1024)
+#define MAX_PREFIXES     16
 
 struct client {
     int      fd;
@@ -116,6 +118,29 @@ static uint32_t sfa_primary_type(uint32_t mask)
     return mask ? (mask & (~mask + 1u)) : 0;
 }
 
+/* --prefix 过滤表放在文件作用域：broadcast 被四处调用，而过滤对所有订阅者一致，
+ * 不值得为它给broadcast 加参数。 */
+static const char *g_prefix[MAX_PREFIXES];
+static int         g_nprefix;
+
+/* 前缀按路径分量比较，不能用裸 strncmp —— 那样 /usrlocal 会被 /usr 收进来。
+ * 末尾多余的 '/' 忽略；"/" 表示整棵文件系统。 */
+static int path_has_prefix(const char *path, const char *prefix)
+{
+    size_t n = strlen(prefix);
+    while (n > 1 && prefix[n - 1] == '/') n--;
+    if (n == 1) return path[0] == '/';
+    if (strncmp(path, prefix, n) != 0) return 0;
+    return path[n] == '\0' || path[n] == '/';
+}
+
+static int path_allowed(const char *path)
+{
+    for (int i = 0; i < g_nprefix; i++)
+        if (path_has_prefix(path, g_prefix[i])) return 1;
+    return 0;
+}
+
 /* 订阅过滤按完整掩码做交集：内核会把多个变化合并进一条事件，
  * 只看主事件会让订阅了其他位的客户端漏收。 */
 static void broadcast(struct client *clients, int nclients,
@@ -123,6 +148,9 @@ static void broadcast(struct client *clients, int nclients,
 {
     for (int i = 0; i < nclients; i++) {
         if (!(clients[i].mask & ev->mask)) continue;
+        /* 无路径事件（SFA_EV_OVERFLOW）一律放行，不参与前缀过滤：
+         * 它是「有东西丢了」的唯一通知，按前缀挡掉等于把静默丢失重新引进来。 */
+        if (g_nprefix && ev->path[0] && !path_allowed(ev->path)) continue;
         /* 事件较大，用阻塞 send 保证完整；SOCK_SEQPACKET 保证消息边界 */
         if (send(clients[i].fd, ev, sizeof(*ev), MSG_NOSIGNAL) < 0) {
             /* 单次失败不清理；下一轮 poll 会看到 POLLHUP/ERR 再清理 */
@@ -130,30 +158,149 @@ static void broadcast(struct client *clients, int nclients,
     }
 }
 
+/* 前缀比较错得很安静（少收或多收事件都不会报错），而仓库里没有测试框架，
+ * 所以留一个可运行的自检入口：make selftest。 */
+static int selftest_prefix(void)
+{
+    static const struct { const char *path, *prefix; int want; } T[] = {
+        { "/usr/bin/tool", "/usr",   1 },
+        { "/usr",          "/usr",   1 },
+        { "/usr/",         "/usr",   1 },
+        { "/usrlocal/x",   "/usr",   0 },
+        { "/etc/passwd",   "/usr",   0 },
+        { "/usr2",         "/usr",   0 },
+        { "/a/b/c",        "/a/b",   1 },
+        { "/a/bc",         "/a/b",   0 },
+        { "/tmp/x",        "/",     1 },
+        { "/usr/x",        "/usr/",  1 },
+    };
+    size_t n = sizeof(T) / sizeof(T[0]);
+    size_t i;
+    int bad = 0;
+
+    for (i = 0; i < n; i++) {
+        int got = path_has_prefix(T[i].path, T[i].prefix);
+        if (got != T[i].want) {
+            fprintf(stderr, "selftest: path_has_prefix(\"%s\", \"%s\") = %d，期望 %d\n",
+                    T[i].path, T[i].prefix, got, T[i].want);
+            bad++;
+        }
+    }
+    if (bad) { fprintf(stderr, "selftest: %d/%zu 项失败\n", bad, n); return 1; }
+    printf("selftest: path_has_prefix %zu/%zu 全过\n", n, n);
+    return 0;
+}
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
             "用法:\n"
-            "  %s <mount-path> [socket-path]   启动事件代理\n"
-            "  %s --probe <mount-path>         只探测本机 fanotify 能力并退出\n",
+            "  %s <mount-path> [socket-path] [选项]\n"
+            "  %s --probe <mount-path>只探测本机 fanotify 能力并退出\n"
+            "\n"
+            "选项:\n"
+            "  --group <组名>    socket 属组设成该组、权限 0660（默认 0600 root:root）\n"
+            "  --prefix <路径>   只推送该前缀下的事件，可重复；按路径分量比较\n"
+            "  --selftest        运行内置自检（不需要挂载点）后退出\n"
+            "  -h, --help        打印本用法\n",
             prog, prog);
+}
+
+struct options {
+    const char *mount;
+    const char *sock;
+    const char *group;
+    const char *prefix[MAX_PREFIXES];
+    int         nprefix;
+    int         probe;
+    int         selftest;
+};
+
+/* 位置参数与选项可以任意顺序混排；未知选项一律报错，不静默当成路径。
+ * 返回 0 正常，-1 出错，1 已打印用法（--help / 缺 mount）。 */
+static int parse_args(int argc, char **argv, struct options *o)
+{
+    const char *pos[2] = { NULL, NULL };
+    int npos = 0;
+
+    memset(o, 0, sizeof(*o));
+
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+
+        if (!strcmp(a, "--probe") || !strcmp(a, "-p")) {
+            o->probe = 1;
+        } else if (!strcmp(a, "--selftest")) {
+            o->selftest = 1;
+        } else if (!strcmp(a, "--group")) {
+            if (++i >= argc) { fprintf(stderr, "sfa-server: --group 缺少组名\n"); return -1; }
+            o->group = argv[i];
+        } else if (!strncmp(a, "--group=", 8)) {
+            o->group = a + 8;
+        } else if (!strcmp(a, "--prefix")) {
+            if (++i >= argc) { fprintf(stderr, "sfa-server: --prefix 缺少路径\n"); return -1; }
+            if (o->nprefix >= MAX_PREFIXES) {
+                fprintf(stderr, "sfa-server: --prefix 最多 %d 个\n", MAX_PREFIXES);
+                return -1;
+            }
+            o->prefix[o->nprefix++] = argv[i];
+        } else if (!strncmp(a, "--prefix=", 9)) {
+            if (o->nprefix >= MAX_PREFIXES) {
+                fprintf(stderr, "sfa-server: --prefix 最多 %d 个\n", MAX_PREFIXES);
+                return -1;
+            }
+            o->prefix[o->nprefix++] = a + 9;
+        } else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
+            usage(argv[0]);
+            return 1;
+        } else if (a[0] == '-' && a[1] != '\0') {
+            fprintf(stderr, "sfa-server: 未知选项 %s\n", a);
+            return -1;
+        } else if (npos >= 2) {
+            fprintf(stderr, "sfa-server: 多余的位置参数 %s\n", a);
+            return -1;
+        } else {
+            pos[npos++] = a;
+        }
+    }
+
+    if (o->selftest && !pos[0]) return 0;   /* 自检不需要挂载点 */
+    if (!pos[0]) { usage(argv[0]); return -1; }
+    o->mount = pos[0];
+    o->sock  = pos[1] ? pos[1] : SFA_SOCKET_PATH;
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { usage(argv[0]); return 1; }
+    struct options o;
+    int opt_rc = parse_args(argc, argv, &o);
+    if (opt_rc < 0) return 1;
+    if (opt_rc > 0) return 0;
 
-    /* --probe：只打印能力报告，不启动服务 */
-    if (strcmp(argv[1], "--probe") == 0 || strcmp(argv[1], "-p") == 0) {
-        if (argc < 3) { usage(argv[0]); return 1; }
+    if (o.selftest) return selftest_prefix();
+
+    /* 前缀必须是绝对路径：事件路径全部来自 /proc/self/fd 的 readlink，
+     * 一定是绝对路径，相对前缀会一条都不匹配而静默收不到事件。 */
+    for (int i = 0; i < o.nprefix; i++) {
+        if (o.prefix[i][0] != '/') {
+            fprintf(stderr, "sfa-server: --prefix 必须是绝对路径: %s\n", o.prefix[i]);
+            return 1;
+        }
+        g_prefix[g_nprefix++] = o.prefix[i];
+    }
+
+    const char *mount_path = o.mount;
+    const char *sock_path  = o.sock;
+
+    /* --probe：只打印能力报告，不启动服务。原先靠 argv[1] 认自己，
+     * 现在由parse_args 统一识别，位置不再敏感。 */
+    if (o.probe) {
         struct sfa_caps caps;
-        sfa_probe(argv[2], &caps);
+        sfa_probe(mount_path, &caps);
         sfa_probe_print(&caps, stdout);
         return caps.usable ? 0 : 1;
     }
-
-    const char *mount_path = argv[1];
-    const char *sock_path  = argc > 2 ? argv[2] : SFA_SOCKET_PATH;
 
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
@@ -194,10 +341,29 @@ int main(int argc, char **argv)
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("bind"); return 1;
     }
-    chmod(sock_path, 0600);   /* 收紧权限；需要多用户访问时调整 */
+    /* 属组必须在 chmod 之前设好：chown 会清掉 set-id 位，而最终权限由后面那次
+     * chmod 决定，所以顺序不能反。--group 失败一律退出，不静默退回 0600 ——
+     * 那正是这个选项要修的那个形态。 */
+    if (o.group) {
+        struct group *gr = getgrnam(o.group);
+        if (!gr) {
+            fprintf(stderr, "sfa-server: 未知组 %s\n", o.group);
+            return 1;
+        }
+        if (chown(sock_path, 0, gr->gr_gid) < 0) { perror("chown"); return 1; }
+        if (chmod(sock_path, 0660) < 0) { perror("chmod"); return 1; }
+    } else if (chmod(sock_path, 0600) < 0) {
+        perror("chmod");
+        return 1;
+    }
     if (listen(listen_fd, MAX_CLIENTS) < 0) { perror("listen"); return 1; }
 
-    fprintf(stderr, "sfa-server: mount=%s socket=%s\n", mount_path, sock_path);
+    if (o.group)
+        fprintf(stderr, "sfa-server: mount=%s socket=%s mode=0660 owner=root:%s\n",
+                mount_path, sock_path, o.group);
+    else
+        fprintf(stderr, "sfa-server: mount=%s socket=%s mode=0600 owner=root:root\n",
+                mount_path, sock_path);
 
     struct client clients[MAX_CLIENTS];
     int nclients = 0;

@@ -8,3 +8,8 @@
 .idea/
 *.swp
 .DS_Store
+
+# 发行包产物
+# 必须忽略：dist/ 里若被跟踪，make dist 产出的 tarball 会让 git status 恒为脏，
+# 版本串就永远回不到干净态，-dirty 标记也就失去意义。
+/dist/
