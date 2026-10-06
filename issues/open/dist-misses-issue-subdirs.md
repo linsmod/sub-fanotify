@@ -5,7 +5,7 @@ type: bug
 priority: P1
 created: 2026-10-06
 closed:
-commit:
+commit: 4fda81569092
 verdict:
 ---
 
@@ -154,4 +154,6 @@ NEXT（验收标准）：
 `6.18.40.1-microsoft-standard-WSL2` —— 与前三篇 issue 实测所用环境一致，
 所以那三篇的测量可以在本机复现，不必依赖提出者。这条已单独记进 #5 的结论。
 
-**改动未提交** —— `commit` 字段留空，等提交后回填。
+**已提交** `4fda81569092`。**现象一节的 `Makefile:47` / `:62-63` 行号以 `eff9956` 为基准，
+已失效** —— 现状见 `Makefile:54`（`ISSUES`）与其后的 `cp` 循环。本篇记录的是修复前的
+状态，行号漂移不影响对照。

@@ -5,7 +5,7 @@ type: bug
 priority: P0
 created: 2026-10-06
 closed:
-commit:
+commit: 4fda81569092
 verdict:
 ---
 
@@ -155,4 +155,8 @@ NEXT（验收标准）：
 代理不会也不应该替客户端加组**，这一点在实测里比在文字里清楚。
 
 **尚未做的**：`SFA_PROTO_VERSION` 未变（正确，本篇不涉及协议）；systemd socket 激活
-仍在本篇范围外。**改动未提交** —— `commit` 字段留空，等提交后回填。
+仍在本篇范围外。
+
+**已提交** `4fda81569092`。**现象一节的行号以 `eff9956` 为基准，已失效** ——
+`chmod` 那一行现在在 `sfa-server.c:353-355`（`chown` 在 353，`chmod 0660` 在 354，
+默认 `chmod 0600` 在 355），启动日志在 `:362`，CLI 解析是 `parse_args()`。摘录仍然有效。

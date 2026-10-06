@@ -5,7 +5,7 @@ type: feature
 priority: P2
 created: 2026-10-06
 closed:
-commit:
+commit: 4fda81569092
 verdict:
 ---
 
@@ -166,4 +166,6 @@ NEXT（验收标准，本篇保留的这一半）：
    `SFA_EV_UNRESOLVED`）是「有东西丢了」的唯一通知，按前缀挡掉等于把静默丢失重新引进来。
    宁可多投一条信号，不可少投。
 
-**改动未提交** —— `commit` 字段留空，等提交后回填。
+**已提交** `4fda81569092`。**现象一节里 `sfa-server.c:181-185`（mark 下发）的行号以
+`eff9956` 为基准，已失效**；`sfa_probe.c` 未改动，那两处行号仍然正确。
+裁剪发生在新位置 `sfa-server.c:153`，前缀比较是 `:128` 的 `path_has_prefix()`。
