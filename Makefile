@@ -10,8 +10,14 @@ sfa-server: sfa-server.c sfa_probe.c sfa.h sfa_probe.h
 sfa_client: sfa_client.c libsfa.c sfa.h
 	$(CC) $(CFLAGS) -o $@ sfa_client.c libsfa.c $(LDFLAGS)
 
+# 客户端 SDK 静态库：编译包（make dist 的 lib/）与源码包之外的第三个产物
+libsfa.a: libsfa.c sfa.h
+	$(CC) $(CFLAGS) -c libsfa.c -o libsfa.o
+	ar rcs $@ libsfa.o
+	@rm -f libsfa.o
+
 clean:
-	rm -f sfa-server sfa_client
+	rm -f sfa-server sfa_client libsfa.a libsfa.o
 
 # 语法/语义检查：只编译不链接，快速验证改动
 check: sfa.h sfa_probe.h
@@ -57,9 +63,10 @@ MTIME     := $(shell $(GIT) show -s --format=%ct HEAD 2>/dev/null || echo 0)
 
 SRCFILES  := sfa.h sfa_probe.h sfa_probe.c sfa-server.c libsfa.c sfa_client.c
 DOCFILES  := README.md
-# issues/ 是两层的：规范在根，issue 在 open/ 与 closed/。wildcard 不递归，
-# 只写 issues/*.md 会把全部 issue 漏掉，而 README 承诺它们随包发布。
-ISSUES    := $(wildcard issues/*.md issues/*/*.md)
+# issues/ 是两层的：规范在根，issue 在 open/ 与 closed/。只取 git 已跟踪的
+# （git ls-files）——这直接兑现 README「only committed files are packed」的承诺，
+# 也让 dist 的校验不再需要针对 issues/ 单独告警：未提交的 issue 本来就进不了包。
+ISSUES    := $(shell $(GIT) ls-files 'issues/*.md' 'issues/*/*.md' 2>/dev/null)
 DISTFILES := Makefile $(SRCFILES) $(DOCFILES)
 
 DISTDIR   := dist
@@ -67,12 +74,19 @@ PKGNAME   := sfa-$(VERSION)
 STAGE     := $(DISTDIR)/.stage-$(PKGNAME)
 PKG       := $(DISTDIR)/$(PKGNAME).tar.gz
 
-# 固定 owner 与 mtime（取 commit 的提交时间），同一 commit 重复打包得到同样的
-# 字节。需要 GNU tar >= 1.28（--sort）。
-dist:
+# 编译包：include/ + lib/（头文件、静态 SDK、两个可执行文件）。
+# 内容随编译环境（编译器版本、libc、内核头）变化，不承诺跨机字节一致；
+# 源码包保持确定性（同 commit 同字节），可复现构建请用源码包。
+BINNAME   := sfa-$(VERSION)-bin
+BINSTAGE  := $(DISTDIR)/.stage-$(BINNAME)
+BINPKG    := $(DISTDIR)/$(BINNAME).tar.gz
+
+# 固定 owner 与 mtime（取 commit 的提交时间），源码包同一 commit 重复打包得到
+# 同样的字节。需要 GNU tar >= 1.28（--sort）。
+dist: all libsfa.a
 	@$(GIT) rev-parse --git-dir >/dev/null 2>&1 || \
 	    { echo "make dist 需要在 sfa 这个 git 仓库内运行"; exit 1; }
-	@rm -rf "$(STAGE)"
+	@rm -rf "$(STAGE)" "$(BINSTAGE)"
 	@mkdir -p "$(STAGE)/$(PKGNAME)/issues"
 	@cp $(DISTFILES) "$(STAGE)/$(PKGNAME)/"
 	@for f in $(ISSUES); do \
@@ -82,16 +96,20 @@ dist:
 	@printf '%s\n' '$(VERSION)' > "$(STAGE)/$(PKGNAME)/VERSION"
 	@tar --sort=name --owner=0 --group=0 --numeric-owner \
 	     --mtime='@$(MTIME)' -C "$(STAGE)" -czf "$(PKG)" "$(PKGNAME)"
-	@rm -rf "$(STAGE)"
+	@mkdir -p "$(BINSTAGE)/$(BINNAME)/include" "$(BINSTAGE)/$(BINNAME)/lib"
+	@cp sfa.h sfa_probe.h "$(BINSTAGE)/$(BINNAME)/include/"
+	@cp libsfa.a sfa-server sfa_client "$(BINSTAGE)/$(BINNAME)/lib/"
+	@printf '%s\n' '$(VERSION)' > "$(BINSTAGE)/$(BINNAME)/VERSION"
+	@tar --sort=name --owner=0 --group=0 --numeric-owner \
+	     --mtime='@$(MTIME)' -C "$(BINSTAGE)" -czf "$(BINPKG)" "$(BINNAME)"
+	@rm -rf "$(STAGE)" "$(BINSTAGE)"
 	@echo "---"
 	@echo "package : $(PKG)"
+	@echo "bin pkg : $(BINPKG)"
 	@echo "version : $(VERSION)"
 	@echo "commit  : $(REVISION)"
 	@echo "dirty   : $(if $(DIRTY),yes,no)"
-	@if [ -n "$(ISSUES)" ] && $(GIT) status --porcelain -- $(ISSUES) | grep -q .; then \
-	    echo "warn    : issues/ 尚未提交，包内容会随工作区变化"; \
-	fi
-	@sha256sum "$(PKG)" | tee "$(PKG).sha256"
+	@sha256sum "$(PKG)" "$(BINPKG)" | tee "$(PKG).sha256"
 
 distclean: clean
 	rm -rf $(DISTDIR)

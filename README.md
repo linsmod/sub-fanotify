@@ -70,9 +70,18 @@ Requires GCC or Clang with C11 and `make`.
 
 ## Releases
 
-`make dist` writes `dist/sfa-<version>.tar.gz` plus a `.sha256` next to it. The
-version string is `git describe` — `v1.2.0-3-gdeadbee`, or the bare commit hash
-before the first tag — so a package always names the tree it came from.
+`make dist` writes two artifacts into `dist/`, each with a `.sha256` next to it:
+
+- `sfa-<version>.tar.gz` — the **source package**: all sources, the `Makefile`,
+  this README and `issues/` (the known-limitations document). Rebuild everything
+  from it with `make`.
+- `sfa-<version>-bin.tar.gz` — the **prebuilt package**, structured as an SDK:
+  `include/` (`sfa.h`, `sfa_probe.h`) and `lib/` (`libsfa.a` plus the
+  `sfa-server` and `sfa_client` executables). Its bytes depend on the build
+  environment (compiler, libc, kernel headers).
+
+The version string is `git describe` — `v1.2.0-3-gdeadbee`, or the bare commit
+hash before the first tag — so a package always names the tree it came from.
 
 **Any uncommitted change to a tracked *or* untracked file appends `-dirty`.** Such
 a package is for your own testing; do not hand it out. Untracked files count
@@ -86,10 +95,11 @@ cat dist/sfa-<version>/VERSION       # same string, for the record
 ```
 
 Owner and mtime are pinned to the commit's committer date, so the same commit
-reproduces the same bytes. Only committed files are packed: untracked ones are
-reported by `make dist` and left out, because packing them would make one commit
-produce two different tarballs. `issues/` is the known-limitations document for a
-release and travels with the package once it is committed.
+reproduces the same bytes — a guarantee that only the source package can make,
+since the binaries in the `-bin` package vary with the toolchain. Only committed
+files are packed: `issues/` is collected through `git ls-files`, so untracked
+issues are left out by construction. `issues/` is the known-limitations document
+for a release and travels with the package once it is committed.
 
 ## Usage
 
