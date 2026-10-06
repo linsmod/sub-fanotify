@@ -74,6 +74,7 @@ const char *sfa_event_name(uint32_t type)
     case SFA_EV_ATTRIB:      return "ATTRIB";
     case SFA_EV_OVERFLOW:    return "OVERFLOW";
     case SFA_EV_MOVED:       return "MOVED";
+    case SFA_EV_UNRESOLVED:  return "UNRESOLVED";
     default:                 return "UNKNOWN";
     }
 }

@@ -47,6 +47,14 @@ it can engage backends that do not support exportfs. `--probe` reports both
 (`MOUNT n/7, FILESYSTEM m/7`) so the coverage difference is visible before you
 rely on it. Use `--prefix` to narrow what reaches clients.
 
+Even with `open_by_handle_at` fully available, events whose parent directory is
+deleted before the server reads them still cannot be resolved to a path — this
+is a timing window in the fanotify API itself, not a missing capability. Such
+events are not silently dropped: the server emits a `SFA_EV_UNRESOLVED` signal
+event (empty path, subscribable like any other bit) once per read batch, plus a
+loss count with errno breakdown on stderr. Clients subscribed to that bit
+should treat it the same as `SFA_EV_OVERFLOW`: resync with a full pass.
+
 ## Build
 
 ```sh

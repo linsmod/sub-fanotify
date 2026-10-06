@@ -26,6 +26,14 @@ check: sfa.h sfa_probe.h
 selftest: sfa-server
 	./sfa-server --selftest
 
+# 端到端：起真实服务端 + 客户端，验证背压与丢失信号（scripts/test_*.sh）。
+# 需要 root 与支持 fanotify 的 Linux（WSL2 验证过）；任一脚本失败即停。
+e2e: all
+	@set -e; for t in scripts/test_*.sh; do \
+	    echo "== $$t"; ./"$$t"; \
+	done
+	@echo "e2e: all passed"
+
 # 能力探测：make probe P=/data
 probe: sfa-server
 	./sfa-server --probe $(or $(P),/)

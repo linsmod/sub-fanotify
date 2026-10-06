@@ -24,9 +24,20 @@
 #define EVENT_BUF_SIZE   (64 * 1024)
 #define MAX_PREFIXES     16
 
+/* desynced 客户端持续这么久仍无法投递就断开。
+ * 取 10 秒：一个正常排空的客户端 10 秒读不了一点 socket 只能是卡死了，
+ * 继续占着槽位和 4KB 级的内核缓冲没有意义；取 0 等于立刻踢（丢掉补发
+ * 信号的价值），取无限等于放任永不读取的客户端泄漏槽位（MAX_CLIENTS
+ * 总共 64 个）。
+ * 注意是墙钟而不是「失败次数/轮数」：一轮 poll 的时长取决于事件流量，
+ * 一次突发里 send 可以在几毫秒内连续 EAGAIN 上百次，按次/按轮计数会把
+ * 还在正常排空的客户端误杀（e2e 实测踩过）。 */
+#define DESYNC_KICK_TIMEOUT_MS 10000
+
 struct client {
     int      fd;
     uint32_t mask;
+    int64_t  desync_since_ms; /* 投递缓冲满的起始时刻（monotonic ms），0 = 正常 */
 };
 
 static volatile sig_atomic_t g_stop = 0;
@@ -37,6 +48,14 @@ static uint64_t now_ns(void)
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/* monotonic 毫秒：desync 计时用，不受系统时间跳变影响 */
+static int64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 /* 将 fanotify_event_info_fid 解析为路径。
@@ -66,7 +85,10 @@ static int resolve_dfid_event(int mount_fd,
         if (nlen == 1 && name[0] == '.')
             return 0;
         size_t plen = (size_t)n;
-        if (plen + 1 + nlen + 1 > outlen) return -1;
+        if (plen + 1 + nlen + 1 > outlen) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
         if (plen == 0 || out[plen - 1] != '/') out[plen++] = '/';
         memcpy(out + plen, name, nlen);
         out[plen + nlen] = '\0';
@@ -118,6 +140,70 @@ static uint32_t sfa_primary_type(uint32_t mask)
     return mask ? (mask & (~mask + 1u)) : 0;
 }
 
+/* ---- 丢失统计（一次 read 批次） ----
+ *
+ * 两类失败性质不同，分开计数（issue #2）：
+ *   no_info     内核没给出必要的 info 记录（fid / oldf / newf 为空）——
+ *               说明协商或内核行为出了问题；
+ *   unresolved  有记录但没能产出路径（open_by_handle_at 返回 ESTALE、
+ *               双路径之和超出 4KB 等）—— fanotify 的时序窗口，删除比
+ *               读事件快时必然发生。
+ * 混在一个计数器里，stderr 上的数字会把这两种病因混成一件事。 */
+#define LOSS_ERRNO_SLOTS 8
+struct loss_stats {
+    unsigned no_info;
+    unsigned unresolved;
+    struct { int err; unsigned n; } errnos[LOSS_ERRNO_SLOTS];
+    unsigned nerrno;
+};
+
+static void loss_noinfo(struct loss_stats *s)
+{
+    s->no_info++;
+}
+
+static void broadcast(struct client *clients, int nclients,
+                      const struct sfa_event *ev);   /* 定义在下方 */
+
+/* err 传 resolve 失败的 errno；双路径超长不是 syscall 失败，传 EMSGSIZE */
+static void loss_resolve(struct loss_stats *s, int err)
+{
+    s->unresolved++;
+    for (unsigned i = 0; i < s->nerrno; i++)
+        if (s->errnos[i].err == err) { s->errnos[i].n++; return; }
+    /* 超过 8 种 errno 时宁可少记分布也不丢总计数 */
+    if (s->nerrno < LOSS_ERRNO_SLOTS) {
+        s->errnos[s->nerrno].err = err;
+        s->errnos[s->nerrno].n   = 1;
+        s->nerrno++;
+    }
+}
+
+/* 批次收尾：有丢失就向客户端发一条 UNRESOLVED 信号事件，stderr 打一行计数。
+ * 每批次一条而不是每次失败一条：客户端拿到第一条之后的动作是同一种
+ * （补一次全量），精确计数对它没有价值，对运维有价值所以放 stderr。 */
+static void report_loss(struct client *clients, int nclients,
+                        const struct loss_stats *s)
+{
+    if (!s->no_info && !s->unresolved) return;
+
+    fprintf(stderr, "sfa-server: 本批次丢失 %u 条事件（内核未给信息 %u，反解失败 %u",
+            s->no_info + s->unresolved, s->no_info, s->unresolved);
+    for (unsigned i = 0; i < s->nerrno; i++)
+        fprintf(stderr, "%s%s x%u",
+                i == 0 ? "; " : ", ", strerror(s->errnos[i].err), s->errnos[i].n);
+    fprintf(stderr, ")\n");
+
+    struct sfa_event ev = {
+        .type      = SFA_EV_UNRESOLVED,
+        .mask      = SFA_EV_UNRESOLVED,
+        .timestamp = now_ns(),
+        .path_len  = 1,
+    };
+    ev.path[0] = '\0';
+    broadcast(clients, nclients, &ev);
+}
+
 /* --prefix 过滤表放在文件作用域：broadcast 被四处调用，而过滤对所有订阅者一致，
  * 不值得为它给broadcast 加参数。 */
 static const char *g_prefix[MAX_PREFIXES];
@@ -147,13 +233,67 @@ static void broadcast(struct client *clients, int nclients,
                       const struct sfa_event *ev)
 {
     for (int i = 0; i < nclients; i++) {
+        if (clients[i].fd < 0) continue;
         if (!(clients[i].mask & ev->mask)) continue;
-        /* 无路径事件（SFA_EV_OVERFLOW）一律放行，不参与前缀过滤：
-         * 它是「有东西丢了」的唯一通知，按前缀挡掉等于把静默丢失重新引进来。 */
+        /* 无路径事件（OVERFLOW/UNRESOLVED）一律放行，不参与前缀过滤：
+         * 它们是「有东西丢了」的通知，按前缀挡掉等于把静默丢失重新引进来。 */
         if (g_nprefix && ev->path[0] && !path_allowed(ev->path)) continue;
-        /* 事件较大，用阻塞 send 保证完整；SOCK_SEQPACKET 保证消息边界 */
-        if (send(clients[i].fd, ev, sizeof(*ev), MSG_NOSIGNAL) < 0) {
-            /* 单次失败不清理；下一轮 poll 会看到 POLLHUP/ERR 再清理 */
+        /* 非阻塞 send：慢客户端只丢它自己的事件（置 desynced，轮末补发
+         * 丢失信号），绝不能停住整个代理 —— 否则可用性下限等于最慢订阅者。
+         * SOCK_SEQPACKET 保证消息边界，一条事件要么完整送达要么没有。 */
+        if (send(clients[i].fd, ev, sizeof(*ev),
+                 MSG_NOSIGNAL | MSG_DONTWAIT) < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS) {
+                if (!clients[i].desync_since_ms) {
+                    fprintf(stderr, "sfa-server: 客户端 fd=%d 排空不及，"
+                            "开始丢弃它的事件（desynced）\n", clients[i].fd);
+                    clients[i].desync_since_ms = now_ms();
+                }
+            } else {
+                /* EPIPE/ECONNRESET 等：立即断开。压缩逻辑只搬 fd<0 的条目、
+                 * 不回收 fd，这里必须真的 close。 */
+                close(clients[i].fd);
+                clients[i].fd = -1;
+            }
+        }
+    }
+}
+
+/* 轮末对 desynced 客户端补发丢失信号（SFA_EV_UNRESOLVED，与反解失败共用
+ * 同一种信号语义，不另开第三种）。收件人就是丢了事件的那个客户端本身，
+ * 不走 broadcast 的订阅过滤 —— 它需要知道自己落后了；老客户端收到不认识
+ * 的位不会崩，只是把 mask 打印成 UNKNOWN。
+ * 发成功说明缓冲已排空，恢复投递；持续 DESYNC_KICK_TIMEOUT_MS 仍发不出去
+ * 则断开（上界理由见该宏注释）。本函数可安全地被重复调用。 */
+static void desync_kick(struct client *clients, int nclients, int *have_desynced)
+{
+    struct sfa_event ev = {
+        .type      = SFA_EV_UNRESOLVED,
+        .mask      = SFA_EV_UNRESOLVED,
+        .timestamp = now_ns(),
+        .path_len  = 1,
+    };
+    ev.path[0] = '\0';
+    int64_t now = now_ms();
+
+    *have_desynced = 0;
+    for (int i = 0; i < nclients; i++) {
+        if (clients[i].fd < 0 || !clients[i].desync_since_ms) continue;
+        if (now - clients[i].desync_since_ms >= DESYNC_KICK_TIMEOUT_MS) {
+            fprintf(stderr, "sfa-server: 客户端 fd=%d 持续 %d 秒未排空，断开\n",
+                    clients[i].fd, DESYNC_KICK_TIMEOUT_MS / 1000);
+            close(clients[i].fd);
+            clients[i].fd = -1;
+            continue;
+        }
+        if (send(clients[i].fd, &ev, sizeof(ev), MSG_NOSIGNAL | MSG_DONTWAIT)
+                == (ssize_t)sizeof(ev)) {
+            clients[i].desync_since_ms = 0;
+        } else if (errno == EPIPE || errno == ECONNRESET) {
+            close(clients[i].fd);
+            clients[i].fd = -1;
+        } else {
+            *have_desynced = 1;   /* 还满着，下一轮再试 */
         }
     }
 }
@@ -367,6 +507,7 @@ int main(int argc, char **argv)
 
     struct client clients[MAX_CLIENTS];
     int nclients = 0;
+    int have_desynced = 0;   /* 上一轮 desync_kick 的结果，决定本轮 poll 超时 */
     char *evbuf = malloc(EVENT_BUF_SIZE);
     if (!evbuf) { perror("malloc"); return 1; }
 
@@ -379,7 +520,9 @@ int main(int argc, char **argv)
         for (int i = 0; i < nclients; i++)
             pfds[nfds++] = (struct pollfd){ .fd = clients[i].fd, .events = POLLIN };
 
-        int pr = poll(pfds, nfds, -1);
+        /* 有 desynced 客户端时给 1s 超时：desync_rounds 的「轮」才有时间
+         * 下界，否则一个不读的客户端配一个安静的系统会让补发永远不发生。 */
+        int pr = poll(pfds, nfds, have_desynced ? 1000 : -1);
         if (pr < 0) {
             if (errno == EINTR) continue;
             perror("poll");
@@ -392,6 +535,7 @@ int main(int argc, char **argv)
             if (len > 0) {
                 struct fanotify_event_metadata *meta =
                     (struct fanotify_event_metadata *)evbuf;
+                struct loss_stats loss = {0};
 
                 while (FAN_EVENT_OK(meta, len)) {
                     uint32_t mask  = fanotify_mask_to_sfa(meta->mask);
@@ -415,24 +559,37 @@ int main(int argc, char **argv)
                             find_fid_info(meta, FAN_EVENT_INFO_TYPE_NEW_DFID_NAME);
                         char newp[SFA_MAX_PATH], oldp[SFA_MAX_PATH];
 
-                        if (oldf && newf && mask &&
-                            resolve_dfid_event(mount_fd, newf, 1, newp, sizeof(newp)) == 0 &&
-                            resolve_dfid_event(mount_fd, oldf, 1, oldp, sizeof(oldp)) == 0) {
-                            size_t n1 = strlen(newp) + 1, n2 = strlen(oldp) + 1;
-                            if (n1 + n2 <= sizeof(((struct sfa_event *)0)->path)) {
-                                struct sfa_event ev = {
-                                    .type      = SFA_EV_MOVED,
-                                    .mask      = mask,
-                                    .flags     = flags,
-                                    .pid       = meta->pid,
-                                    .timestamp = now_ns(),
-                                    .path2_off = (uint32_t)n1,
-                                    .path_len  = (uint32_t)(n1 + n2),
-                                };
-                                memcpy(ev.path, newp, n1);
-                                memcpy(ev.path + n1, oldp, n2);
-                                broadcast(clients, nclients, &ev);
+                        if (oldf && newf && mask) {
+                            int rn = resolve_dfid_event(mount_fd, newf, 1,
+                                                        newp, sizeof(newp));
+                            int ro = rn == 0 ? resolve_dfid_event(mount_fd, oldf, 1,
+                                                                  oldp, sizeof(oldp))
+                                             : -1;
+                            if (rn == 0 && ro == 0) {
+                                size_t n1 = strlen(newp) + 1, n2 = strlen(oldp) + 1;
+                                if (n1 + n2 <= sizeof(((struct sfa_event *)0)->path)) {
+                                    struct sfa_event ev = {
+                                        .type      = SFA_EV_MOVED,
+                                        .mask      = mask,
+                                        .flags     = flags,
+                                        .pid       = meta->pid,
+                                        .timestamp = now_ns(),
+                                        .path2_off = (uint32_t)n1,
+                                        .path_len  = (uint32_t)(n1 + n2),
+                                    };
+                                    memcpy(ev.path, newp, n1);
+                                    memcpy(ev.path + n1, oldp, n2);
+                                    broadcast(clients, nclients, &ev);
+                                } else {
+                                    /* 双路径之和超出 4KB：事件真实存在但无法完整表达 */
+                                    loss_resolve(&loss, EMSGSIZE);
+                                }
+                            } else {
+                                loss_resolve(&loss, errno);
                             }
+                        } else if (!oldf || !newf) {
+                            /* mask==0 时事件类型不在我们的枚举里，不算丢失 */
+                            loss_noinfo(&loss);
                         }
                     } else {
                         struct fanotify_event_info_fid *fid = find_fid_info(meta, 0);
@@ -453,12 +610,19 @@ int main(int argc, char **argv)
                                 ev.type     = sfa_primary_type(mask);
                                 ev.path_len = (uint32_t)strlen(ev.path) + 1;
                                 broadcast(clients, nclients, &ev);
+                            } else {
+                                loss_resolve(&loss, errno);
                             }
+                        } else if (!fid) {
+                            /* mask==0 时事件类型不在我们的枚举里，不算丢失 */
+                            loss_noinfo(&loss);
                         }
                     }
                     if (meta->fd >= 0) close(meta->fd);   /* 关键：防止 fd 泄漏 */
                     meta = FAN_EVENT_NEXT(meta, len);
                 }
+
+                report_loss(clients, nclients, &loss);
             }
         }
 
@@ -471,8 +635,9 @@ int main(int argc, char **argv)
                 if (send(cfd, &w, sizeof(w), MSG_NOSIGNAL) < 0) {
                     close(cfd);
                 } else if (nclients < MAX_CLIENTS) {
-                    clients[nclients].fd   = cfd;
-                    clients[nclients].mask = 0;      /* 未订阅前不接收 */
+                    clients[nclients].fd             = cfd;
+                    clients[nclients].mask           = 0;   /* 未订阅前不接收 */
+                    clients[nclients].desync_since_ms = 0;
                     nclients++;
                 } else {
                     close(cfd);
@@ -484,6 +649,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < nclients; i++) {
             int pidx = cli_base + i;
             short rev = pfds[pidx].revents;
+            if (clients[i].fd < 0) continue;   /* 本轮 broadcast 中刚断开 */
             if (!(rev & (POLLIN | POLLHUP | POLLERR))) continue;
 
             struct sfa_subscribe_req req;
@@ -496,6 +662,9 @@ int main(int argc, char **argv)
             if (n == (ssize_t)sizeof(req))
                 clients[i].mask = req.mask;
         }
+
+        /* 轮末补发丢失信号：必须在压缩之前，它也可能把 fd 置成 -1 */
+        desync_kick(clients, nclients, &have_desynced);
 
         /* 压缩客户端列表 */
         int w = 0;

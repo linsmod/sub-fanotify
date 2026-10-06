@@ -27,11 +27,16 @@ enum sfa_event_type {
     /* rename：内核 5.17+ 用一条 FAN_RENAME 事件同时给出旧路径与新路径，
      * 无需像 MOVED_FROM/MOVED_TO 那样配对。仅在内核支持时才会出现。 */
     SFA_EV_MOVED       = 1u << 7,
+    /* 丢失信号：有事件发生，但没能以可解析路径送达 —— 路径反解失败
+     * （句柄已过期、双路径超长）或投递缓冲满被丢弃（服务端背压）。
+     * path 为空（path_len == 1），与 SFA_EV_OVERFLOW 同族：客户端收到后
+     * 应把索引标脏做一次全量对账。 */
+    SFA_EV_UNRESOLVED  = 1u << 8,
 };
 
 #define SFA_EV_ALL (SFA_EV_CREATE | SFA_EV_DELETE | SFA_EV_MOVED_FROM | \
                     SFA_EV_MOVED_TO | SFA_EV_CLOSE_WRITE | SFA_EV_ATTRIB | \
-                    SFA_EV_OVERFLOW | SFA_EV_MOVED)
+                    SFA_EV_OVERFLOW | SFA_EV_MOVED | SFA_EV_UNRESOLVED)
 
 /* sfa_event.flags 标志（与事件类型分开，不参与订阅过滤） */
 #define SFA_F_ONDIR  0x1u   /* 事件对象是目录（mkdir/rmdir/目录 rename/chmod 目录） */
