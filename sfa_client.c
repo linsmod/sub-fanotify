@@ -18,7 +18,8 @@ int main(int argc, char **argv)
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
-    int fd = sfa_connect(sock_path);
+    struct sfa_welcome w;
+    int fd = sfa_connect2(sock_path, &w);
     if (fd < 0) { perror("sfa_connect"); return 1; }
 
     if (sfa_subscribe(fd, SFA_EV_ALL) < 0) {
@@ -27,7 +28,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    fprintf(stderr, "[client] 已订阅 %s\n", sock_path);
+    /* 工作模式来自握手：监控范围（MOUNT/FILESYSTEM）决定事件路径可能落在哪，
+     * RENAME_PAIR 决定 rename 是否单条，ONDIR 决定目录事件是否可见。 */
+    char wf[192];
+    fprintf(stderr, "[client] 已订阅 %s\n"
+                    "[client] watch=%s mode=%s\n",
+            sock_path,
+            w.mount[0] ? w.mount : "(未知)",
+            sfa_work_flags_str(w.flags, wf, sizeof(wf)));
 
     while (!g_stop) {
         struct sfa_event ev;

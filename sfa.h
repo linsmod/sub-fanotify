@@ -71,12 +71,28 @@ struct sfa_subscribe_req {
     uint32_t reserved;
 };
 
+/* sfa_welcome.flags：服务端工作模式，连接握手即可知（issue #9）。
+ *
+ * 该字段此前是未使用的 reserved，沿用同一 4 字节位置，sizeof(struct sfa_welcome)
+ * 与解析方式都不变，因此不升 SFA_PROTO_VERSION；老客户端把非零值当垃圾忽略即可。
+ * 填充规则：服务端按实测协商结果置位；客户端必须忽略不认识的位。
+ * flags == 0 表示「旧服务端，未报告」——新服务端 MARK_MOUNT / MARK_FILESYSTEM 必居其一。 */
+#define SFA_WF_MARK_MOUNT      0x0001u  /* 监控范围 = 挂载点（FAN_MARK_MOUNT） */
+#define SFA_WF_MARK_FILESYSTEM 0x0002u  /* 监控范围 = 整个文件系统（降级路径，覆盖更宽） */
+#define SFA_WF_RENAME_PAIR     0x0004u  /* FAN_RENAME：SFA_EV_MOVED 单条带旧+新路径 */
+#define SFA_WF_ONDIR           0x0008u  /* FAN_ONDIR：目录自身的事件可见 */
+#define SFA_WF_PREFIX_FILTER   0x0010u  /* 服务端已按 --prefix 裁剪事件 */
+#define SFA_WF_PATH_LOOKUP     0x0020u  /* open_by_handle_at 可用（否则路径反解失败率高） */
+
 /* 连接建立后服务端推送的欢迎消息 */
 struct sfa_welcome {
     uint32_t version;
-    uint32_t reserved;
+    uint32_t flags;                /* SFA_WF_*；0 = 旧服务端未报告 */
     char     mount[SFA_MAX_PATH];  /* 被监控的挂载点 */
 };
+
+/* 把 flags 拼成 "FILESYSTEM|RENAME_PAIR|ONDIR" 形式；0 得到 "(未报告)" */
+const char *sfa_work_flags_str(uint32_t flags, char *buf, size_t len);
 
 /* 取主路径 / 第二条路径（rename 的旧路径），无第二条路径时返回 NULL */
 static inline const char *sfa_event_path(const struct sfa_event *ev)
@@ -96,6 +112,9 @@ static inline int sfa_event_is_dir(const struct sfa_event *ev)
 
 /* ---- 客户端 SDK 接口 ---- */
 int  sfa_connect(const char *sock_path);           /* 返回 fd，<0 失败 */
+/* 同 sfa_connect，但把握手消息（协议版本、工作模式 flags、被监控的挂载点）交给调用方；
+ * welcome 可为 NULL。旧服务端的 flags 为 0（表示未报告），不是错误。 */
+int  sfa_connect2(const char *sock_path, struct sfa_welcome *welcome);
 int  sfa_subscribe(int fd, uint32_t mask);         /* 0 成功 */
 ssize_t sfa_recv(int fd, struct sfa_event *ev, int timeout_ms);
                                                    /* >0 收到事件；0 超时/对端关闭；<0 错误 */

@@ -144,7 +144,7 @@ is the whole definition.
 
 | Direction | Message | |
 |---|---|---|
-| server → client | `struct sfa_welcome` | protocol version + the mount being watched, sent on connect |
+| server → client | `struct sfa_welcome` | protocol version, the mount being watched and the server's working-mode flags (`SFA_WF_*`: mark scope, rename semantics, `ONDIR`, prefix filtering, path lookup), sent on connect |
 | client → server | `struct sfa_subscribe_req` | event bitmask; `0` unsubscribes |
 | server → client | `struct sfa_event` | `type`/`mask`/`pid`/`flags`/`timestamp` + up to 4 KB of path |
 
@@ -164,8 +164,11 @@ Three decisions are worth knowing before reading the code:
   the kernel merges bits, filtering by `type` alone would silently starve a
   client that subscribed to any other bit of the same event.
 
-The SDK is four calls — `sfa_connect`, `sfa_subscribe`, `sfa_recv`, `sfa_close`
-— plus `sfa_event_path` / `sfa_event_path2` / `sfa_event_is_dir` for the fields.
+The SDK is four calls — `sfa_connect` (or `sfa_connect2`, which also hands back
+the `sfa_welcome`: protocol version, the watched mount and the `SFA_WF_*` working
+mode flags), `sfa_subscribe`, `sfa_recv`, `sfa_close` — plus `sfa_event_path` /
+`sfa_event_path2` / `sfa_event_is_dir` for the fields and `sfa_work_flags_str`
+for printing the mode.
 Into an index, an event is an idempotent upsert by path; that is the whole
 integration.
 

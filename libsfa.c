@@ -10,7 +10,7 @@
 #include <sys/un.h>
 #include <poll.h>
 
-int sfa_connect(const char *sock_path)
+int sfa_connect2(const char *sock_path, struct sfa_welcome *welcome)
 {
     if (sock_path == NULL) sock_path = SFA_SOCKET_PATH;
 
@@ -33,7 +33,13 @@ int sfa_connect(const char *sock_path)
         errno = EPROTO;
         return -1;
     }
+    if (welcome) *welcome = w;
     return fd;
+}
+
+int sfa_connect(const char *sock_path)
+{
+    return sfa_connect2(sock_path, NULL);
 }
 
 int sfa_subscribe(int fd, uint32_t mask)
@@ -77,6 +83,36 @@ const char *sfa_event_name(uint32_t type)
     case SFA_EV_UNRESOLVED:  return "UNRESOLVED";
     default:                 return "UNKNOWN";
     }
+}
+
+/* 把 sfa_welcome.flags 拼成人可读串，便于日志与调试 */
+const char *sfa_work_flags_str(uint32_t flags, char *buf, size_t len)
+{
+    if (!buf || len == 0) return "";
+    buf[0] = '\0';
+    if (flags == 0) {   /* 旧服务端，未报告 */
+        strncat(buf, "(未报告)", len - 1);
+        return buf;
+    }
+    static const struct { uint32_t bit; const char *name; } B[] = {
+        { SFA_WF_MARK_MOUNT,      "MOUNT"          },
+        { SFA_WF_MARK_FILESYSTEM, "FILESYSTEM"     },
+        { SFA_WF_RENAME_PAIR,     "RENAME_PAIR"    },
+        { SFA_WF_ONDIR,           "ONDIR"          },
+        { SFA_WF_PREFIX_FILTER,   "PREFIX_FILTER"  },
+        { SFA_WF_PATH_LOOKUP,     "PATH_LOOKUP"    },
+    };
+    for (size_t i = 0; i < sizeof(B) / sizeof(B[0]); i++) {
+        if (!(flags & B[i].bit)) continue;
+        size_t used = strlen(buf);
+        if (used) {
+            if (used + 1 >= len) break;
+            buf[used] = '|';
+            buf[used + 1] = '\0';
+        }
+        strncat(buf, B[i].name, len - strlen(buf) - 1);
+    }
+    return buf;
 }
 
 /* 把完整掩码拼成 "CREATE|CLOSE_WRITE" 形式，便于日志与调试 */

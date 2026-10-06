@@ -330,6 +330,68 @@ static int selftest_prefix(void)
     return 0;
 }
 
+/* 把探测协商出的工作模式编码成 sfa_welcome.flags（issue #9）。
+ * 客户端据此判断事件语义：监控范围有多大、rename 是否成对、目录事件是否可见、
+ * 事件是否已按前缀裁剪、路径反解是否可用。 */
+static uint32_t work_flags(const struct sfa_caps *caps, int nprefix)
+{
+    uint32_t f = 0;
+    if (caps->mark_flags == FAN_MARK_MOUNT)
+        f |= SFA_WF_MARK_MOUNT;
+    else if (caps->mark_flags == FAN_MARK_FILESYSTEM)
+        f |= SFA_WF_MARK_FILESYSTEM;
+    if (caps->rename_ok) f |= SFA_WF_RENAME_PAIR;
+    if (caps->ondir_ok)  f |= SFA_WF_ONDIR;
+    if (caps->paths_ok)  f |= SFA_WF_PATH_LOOKUP;
+    if (nprefix > 0)     f |= SFA_WF_PREFIX_FILTER;
+    return f;
+}
+
+/* work_flags 错了不会崩，只会让客户端对事件语义判断错，所以留一个可运行自检。
+ * 检查三件事：MARK_MOUNT / MARK_FILESYSTEM 互斥且新服务端必居其一、
+ * --prefix 才置 PREFIX_FILTER、能力缺失时不置对应位。 */
+static int selftest_work_flags(void)
+{
+    struct sfa_caps c;
+    int bad = 0;
+
+    memset(&c, 0, sizeof(c));
+    c.mark_flags = FAN_MARK_MOUNT;
+    c.rename_ok = c.ondir_ok = c.paths_ok = 1;
+
+    uint32_t fm = work_flags(&c, 0);
+    if (!(fm & SFA_WF_MARK_MOUNT) || (fm & SFA_WF_MARK_FILESYSTEM)) {
+        fprintf(stderr, "selftest: MOUNT 模式应置 MOUNT 位且不置 FILESYSTEM 位\n");
+        bad++;
+    }
+    if (fm & SFA_WF_PREFIX_FILTER) {
+        fprintf(stderr, "selftest: 未给 --prefix 不应置 PREFIX_FILTER\n");
+        bad++;
+    }
+
+    c.mark_flags = FAN_MARK_FILESYSTEM;
+    uint32_t ff = work_flags(&c, 2);
+    if (!(ff & SFA_WF_MARK_FILESYSTEM) || (ff & SFA_WF_MARK_MOUNT)) {
+        fprintf(stderr, "selftest: FILESYSTEM 模式应置 FILESYSTEM 位且不置 MOUNT 位\n");
+        bad++;
+    }
+    if (!(ff & SFA_WF_PREFIX_FILTER)) {
+        fprintf(stderr, "selftest: 给了 --prefix 应置 PREFIX_FILTER\n");
+        bad++;
+    }
+
+    c.rename_ok = c.ondir_ok = c.paths_ok = 0;
+    uint32_t f0 = work_flags(&c, 0);
+    if (f0 & (SFA_WF_RENAME_PAIR | SFA_WF_ONDIR | SFA_WF_PATH_LOOKUP)) {
+        fprintf(stderr, "selftest: 能力缺失时不应置对应位\n");
+        bad++;
+    }
+
+    if (bad) return 1;
+    printf("selftest: work_flags 全过\n");
+    return 0;
+}
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -417,7 +479,11 @@ int main(int argc, char **argv)
     if (opt_rc < 0) return 1;
     if (opt_rc > 0) return 0;
 
-    if (o.selftest) return selftest_prefix();
+    if (o.selftest) {
+        int rc = selftest_prefix();
+        if (selftest_work_flags()) rc = 1;
+        return rc;
+    }
 
     /* 前缀必须是绝对路径：事件路径全部来自 /proc/self/fd 的 readlink，
      * 一定是绝对路径，相对前缀会一条都不匹配而静默收不到事件。 */
@@ -503,6 +569,9 @@ int main(int argc, char **argv)
     else
         fprintf(stderr, "sfa-server: mount=%s socket=%s mode=0600 owner=root:root\n",
                 mount_path, sock_path);
+
+    /* 工作模式在协商完成后就固定，握手时直接带给客户端（issue #9） */
+    uint32_t wf = work_flags(&caps, g_nprefix);
 
     struct client clients[MAX_CLIENTS];
     int nclients = 0;
@@ -634,7 +703,8 @@ int main(int argc, char **argv)
         if (pfds[1].revents & POLLIN) {
             int cfd = accept(listen_fd, NULL, NULL);
             if (cfd >= 0) {
-                struct sfa_welcome w = { .version = SFA_PROTO_VERSION };
+                struct sfa_welcome w = { .version = SFA_PROTO_VERSION,
+                                         .flags   = wf };
                 strncpy(w.mount, mount_path, sizeof(w.mount) - 1);
                 if (send(cfd, &w, sizeof(w), MSG_NOSIGNAL) < 0) {
                     close(cfd);
