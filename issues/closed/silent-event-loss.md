@@ -1,12 +1,12 @@
 ---
 id: 2
-status: accepted
+status: closed
 type: bug
 priority: P0
 created: 2026-10-06
-closed:
-commit:
-verdict:
+closed: 2026-10-06
+commit: bdc50bf
+verdict: 四处静默失败收敛为 loss_stats（两类分开计数、stderr 批次聚合），新增可订阅的 SFA_EV_UNRESOLVED 信号；e2e 实测 500 文件 rm -rf 客户端收到 16 条信号
 ---
 
 # 路径反解失败的事件被静默丢弃：一次 500 文件的 rm -rf 只送达 27%
@@ -181,3 +181,19 @@ NEXT（验收标准）：
 验收标准也不同，合并会让两件事都验不了。但两者**必须共用同一个丢失信号形状**：
 新增 `SFA_EV_UNRESOLVED` 是 `SFA_EV_OVERFLOW` 的同族信号，#1 的 desync 补发也走它，
 不另开第三种语义。这条作为约束写在这里和 #1 里。
+## 修复与实测（2026-10-06）
+
+已实现并实测，环境 WSL2 `6.18.40.1-microsoft-standard-WSL2`（root，mark 协商 `FAN_MARK_FILESYSTEM`），
+commit `bdc50bf`。与 #1 一次性实现（共用丢失信号形状）。
+
+| 验收标准 | 实现 / 实测 | |
+|---|---|---|
+| 1. `SFA_EV_UNRESOLVED = 1u<<8`，并入 `SFA_EV_ALL`，加入 `sfa_event_name()` | sfa.h / libsfa.c | 通过 |
+| 2. 一次 500 文件的 rm -rf，客户端能收到无路径信号 | `scripts/test_unresolved.sh`：嵌套删除后客户端收到 16 条 UNRESOLVED，可据此触发全量 | 通过 |
+| 3. README 补「已协商成功时仍可能因句柄过期而丢弃」 | 能力表下方已补一段 | 通过 |
+| 4. `SFA_PROTO_VERSION` 不升 | 未动 | 通过 |
+| 5. stderr 按批次聚合计数，附 errno 分布 | `report_loss()`：每批次一行「丢失 N 条（内核未给信息 x，反解失败 y; ESTALE z）」；errno 分布最多记 8 种，超出只丢分布不丢总数 | 通过 |
+| 6. 四处失败收敛到一个 helper，两类分开计数 | `loss_noinfo()` / `loss_resolve()`；「内核没给」（fid/oldf/newf 缺失）与「反解失败」（open_by_handle_at 失败、双路径超长）分开；mask==0 的未知事件类型不计入（不在上报承诺内） | 通过 |
+
+维护者决定里「:256 属反解失败」的落实：双路径之和越界计入 unresolved，errno 记 `EMSGSIZE`（非 syscall 失败，取语义最近的值，代码注释有说明）。
+第 6 条「可选的更彻底修法」（目录句柄缓存）未做，如需要另开 issue。

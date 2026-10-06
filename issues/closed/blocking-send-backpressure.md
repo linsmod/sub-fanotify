@@ -1,12 +1,12 @@
 ---
 id: 1
-status: accepted
+status: closed
 type: bug
 priority: P0
 created: 2026-10-06
-closed:
-commit:
-verdict:
+closed: 2026-10-06
+commit: bdc50bf
+verdict: broadcast 改非阻塞，慢客户端只丢自己的事件并被 10s 墙钟上界断开、收到补发的 UNRESOLVED；e2e 实测健康客户端不再停摆
 ---
 
 # broadcast 用阻塞 send，一个慢客户端能把特权代理卡死
@@ -181,3 +181,17 @@ NEXT（验收标准）：
 4. `struct client` 新字段在 `sfa-server.c:307-310` 与 `mask` 一起显式初始化；
 5. 一轮 poll 内 `while (FAN_EVENT_OK(...))` 的批次上限**不在本篇范围**，但 #1 的重测数据
    要单独标注「修完 send 之后」，好让 #4 的噪声影响可见。
+## 修复与实测（2026-10-06）
+
+已实现并实测，环境 WSL2 `6.18.40.1-microsoft-standard-WSL2`（root），commit `bdc50bf`。
+与 #2 一次性实现：两者共用 `SFA_EV_UNRESOLVED` 丢失信号（本篇「维护者决定」的要求）。
+
+| 验收标准 | 实现 / 实测 | |
+|---|---|---|
+| 1. `MSG_NOSIGNAL\|MSG_DONTWAIT`；EAGAIN/ENOBUFS 置 desynced 并保留 slot；其他错误 `close()` | broadcast() 已改；EPIPE/ECONNRESET 等立即 `close()` + `fd=-1` | 通过 |
+| 2. desynced 有明确上界 | **有一处偏离本篇建议**：上界不是「N 轮」而是 10 秒墙钟（`DESYNC_KICK_TIMEOUT_MS`）。e2e 实测发现：一次突发里 send 可在毫秒内连续 EAGAIN 上百次、一轮 poll 可短至微秒，按轮计数把还在正常排空的客户端误杀（A 尚未恢复即被断开）。墙钟语义与「持续 N 轮」一致且不受事件流量影响；取值理由在宏注释 | 通过（偏离已记录） |
+| 3. 复现脚本下健康客户端不再停顿超过一轮 | `scripts/test_slow_client.sh`：A SIGSTOP 期间 B 事件数 621→1242 持续增长；修复前基线是停在 26 条 | 通过 |
+| 4. 新字段与 mask 一起显式初始化 | accept 处 `desync_since_ms = 0` | 通过 |
+| 5. 批次上限不在本篇范围，重测数据标注「修完 send 之后」 | e2e 数据均为「修完 send 之后」；`while (FAN_EVENT_OK(...))` 的批次上限仍未做，留待后续 issue | 未做（按约定） |
+
+补发信号按维护者决定走 `SFA_EV_UNRESOLVED`（发往 desynced 客户端本身，不走订阅过滤——老客户端收到未知位只是把 mask 打成 UNKNOWN，不会崩）。desynced 存在时 poll 超时取 1s，使上界有实际时间语义。另：正文「一处补充」指出的 welcome 阻塞 send（accept 之后那次）按正文要求未动。
