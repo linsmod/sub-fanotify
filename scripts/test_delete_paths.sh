@@ -12,17 +12,27 @@ set -u
 cd "$(dirname "$0")/.."
 
 TMP=$(mktemp -d /tmp/sfa-e2e.XXXXXX) || exit 1
-trap 'kill $SRV $C 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
+
+# 只 wait 自己起过的 PID：裸 `wait` 会等所有子进程，客户端是长驻进程时会挂住
+PIDS=""
+cleanup() {
+    kill $PIDS 2>/dev/null
+    wait $PIDS 2>/dev/null
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 MNT=$TMP/mnt
 SOCK=$TMP/sfa.sock
 mkdir -p "$MNT"
 
 ./sfa-server "$MNT" "$SOCK" 2>"$TMP/server.log" & SRV=$!
+PIDS="$PIDS $SRV"
 for i in $(seq 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 [ -S "$SOCK" ] || { echo "FAIL: server 未能启动"; exit 1; }
 
 ./sfa_client "$SOCK" >"$TMP/C.out" 2>/dev/null & C=$!
+PIDS="$PIDS $C"
 sleep 0.5
 
 # 先建后删：与 issue #5 的实测同形状（40 个空文件，一次性 rm）

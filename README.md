@@ -154,6 +154,39 @@ connect. That is the safe default, and it is also why a non-root client needs
 `--group` on the server side: group membership is a deployment concern, not
 something the proxy can grant.
 
+## Embedding the server
+
+The proxy is also available as a library, for callers that are **already a
+privileged daemon** and would rather have the watcher as a component instead of
+a child process:
+
+```c
+#include "sfa_server.h"
+
+struct sfa_srv_opts opts = { .mount = "/data" };
+struct sfa_srv *srv;
+if (sfa_srv_open(&srv, &opts) < 0) return 1;   /* 原因经日志回调/ sfa_srv_error */
+sfa_srv_run(srv);                              /* blocks until sfa_srv_stop() */
+sfa_srv_close(srv);
+```
+
+`sfa_srv_stop()` is async-signal-safe (it sets a flag and writes to an internal
+self-pipe that wakes `poll`), so it can be called from a signal handler or from
+another thread. To drive it from your own event loop, poll `sfa_srv_fd()` and
+then call `sfa_srv_poll(srv, 0)`. Several instances can coexist in one process.
+
+Link against `libsfa-server.a`, or `libsfa-all.a` if you want the client SDK in
+the same archive. `libsfa.a` deliberately stays client-only.
+
+**Two constraints to weigh before choosing this shape:**
+
+1. **Privilege boundary.** fanotify needs `CAP_SYS_ADMIN`, so the embedding
+   process is privileged by definition. If the caller is an unprivileged
+   indexer, embedding the watcher would give the indexer root — which is exactly
+   the problem this project exists to avoid. Keep the child-process split there.
+2. **Merged failure domain.** A crash in the watcher now takes the caller down
+   with it; with the child-process model, only the proxy dies.
+
 ## Protocol
 
 Fixed-size structs over `SOCK_SEQPACKET`, so one `recv` is one message and a

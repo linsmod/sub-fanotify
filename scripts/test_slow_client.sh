@@ -11,21 +11,35 @@ set -u
 cd "$(dirname "$0")/.."
 
 TMP=$(mktemp -d /tmp/sfa-e2e.XXXXXX) || exit 1
-trap 'kill $SRV $A $B 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
+
+# 只 wait 自己起过的 PID，并且先 CONT 再 TERM：本脚本会 SIGSTOP 一个客户端，
+# 停住的进程收到 TERM 会一直挂着（信号 pending 但不投递），裸 `wait` 就永远不返回。
+PIDS=""
+cleanup() {
+    kill -CONT $PIDS 2>/dev/null
+    kill      $PIDS 2>/dev/null
+    wait      $PIDS 2>/dev/null
+    kill -KILL $PIDS 2>/dev/null
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 MNT=$TMP/mnt
 SOCK=$TMP/sfa.sock
 mkdir -p "$MNT"
 
 ./sfa-server "$MNT" "$SOCK" 2>"$TMP/server.log" & SRV=$!
+PIDS="$PIDS $SRV"
 for i in $(seq 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 [ -S "$SOCK" ] || { echo "FAIL: server 未能启动"; exit 1; }
 
 ./sfa_client "$SOCK" >"$TMP/A.out" 2>/dev/null & A=$!
+PIDS="$PIDS $A"
 sleep 0.5
 kill -STOP $A            # A 停止读取，socket 缓冲将满
 
 ./sfa_client "$SOCK" >"$TMP/B.out" 2>/dev/null & B=$!
+PIDS="$PIDS $B"
 sleep 0.5
 
 count() { grep -c "path=" "$TMP/B.out" 2>/dev/null || true; }
